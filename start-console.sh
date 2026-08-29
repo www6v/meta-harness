@@ -79,6 +79,7 @@ export PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-http://127.0.0.1:8787}"
 export AUTH_DATABASE_PATH="${AUTH_DATABASE_PATH:-${ROOT_DIR}/data/auth.db}"
 export OMA_DATABASE_PATH="${OMA_DATABASE_PATH:-${DATABASE_PATH}}"
 export OMA_INTERNAL_SECRET="${OMA_INTERNAL_SECRET:-}"
+export OMA_DEEPSEEK_GATEWAY_URL="${OMA_DEEPSEEK_GATEWAY_URL:-http://127.0.0.1:3080}"
 
 # Free the service ports before starting (see _oma_free_port).
 _oma_free_port "${OMA_LISTEN_ADDR##*:}"

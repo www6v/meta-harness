@@ -2,7 +2,7 @@
 
 > English: [README.md](./README.md)
 
-可自托管的 **Open Managed Agents (OMA)** 栈：Go 平台运行时 + Python piPy 执行侧车（sidecar）。平台负责持久化、并发与 HTTP API；执行器负责 LLM 循环与工具调用。
+可自托管的 **Meta Harness (MH)** 栈：Go 平台运行时 + Python piPy 执行侧车（sidecar）。平台负责持久化、并发与 HTTP API；执行器负责 LLM 循环与工具调用。
 
 ## 在线 Demo
 

@@ -2,7 +2,7 @@
 
 > 中文文档：[readme-zh.md](./readme-zh.md)
 
-Self-hostable **Open Managed Agents (OMA)** stack: a Go platform runtime plus a Python piPy harness sidecar. The platform owns durability, concurrency, and the HTTP API; the harness owns the LLM loop and tool execution.
+Self-hostable **Meta Harness (MH)** stack: a Go platform runtime plus a Python piPy harness sidecar. The platform owns durability, concurrency, and the HTTP API; the harness owns the LLM loop and tool execution.
 
 ## Live Demo
 
