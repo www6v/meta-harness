@@ -1,4 +1,4 @@
-# Coordinate specialist team migration
+﻿# Coordinate specialist team migration
 
 > **Source:** Anthropic `managed_agents/CMA_coordinate_specialist_team.ipynb`  
 > **Target:** `sdk/example/example5/` + Go `TestCoordinateCookbook*`  
@@ -66,4 +66,4 @@ Flow: `internal/integrationtest/coordinate_flow.go`
 
 - [managed-agents-cookbook-roadmap.md](./managed-agents-cookbook-roadmap.md)
 - [subagent design](../design/subagent.md)
-- SDK: `oma_sdk/subagent.py` (`build_multiagent`, thread counters)
+- SDK: `sdk/subagent.py` (`build_multiagent`, thread counters)

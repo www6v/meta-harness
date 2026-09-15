@@ -1,4 +1,4 @@
-# open-managed-agents → meta-harness 迁移计划
+﻿# open-managed-agents → meta-harness 迁移计划
 
 > Engineering review — 2026-07-10（Sandbox Phase A 专项审查 + 矩阵同步）  
 > 目标仓库：`meta-harness`（Go 平台 + Python piPy harness 侧车 + Python SDK）  
@@ -9,7 +9,7 @@
 
 本文档记录 `open-managed-agents` 与 `meta-harness` 的**功能对齐矩阵**与分阶段迁移 backlog。
 
-早期版本（2026-06-07）假设 TypeScript `main-node` 复制路径；当前实现已改为 **Go `oma-server` + Python `harness/` 侧车 + `sdk/oma_sdk`**，矩阵以实际代码为准。验收脚本：`scripts/e2e/console-integration.sh`、`scripts/e2e/smoke-all.sh`；Console QA 最新：`scripts/e2e/.gstack/qa-reports/qa-report-console-2026-06-20.json`（healthScore 100，15/15 路由）。Cookbook parity 路线图：`docs/sdk-migrate/managed-agents-cookbook-roadmap.md`；设计文档索引：`docs/design/`。
+早期版本（2026-06-07）假设 TypeScript `main-node` 复制路径；当前实现已改为 **Go `oma-server` + Python `harness/` 侧车 + `sdk/sdk`**，矩阵以实际代码为准。验收脚本：`scripts/e2e/console-integration.sh`、`scripts/e2e/smoke-all.sh`；Console QA 最新：`scripts/e2e/.gstack/qa-reports/qa-report-console-2026-06-20.json`（healthScore 100，15/15 路由）。Cookbook parity 路线图：`docs/sdk-migrate/managed-agents-cookbook-roadmap.md`；设计文档索引：`docs/design/`。
 
 ---
 
@@ -81,7 +81,7 @@ Console 全量 wire 验收：`scripts/e2e/console-integration.sh`
 │    web_fetch · web_search · MCP · call_agent             │
 │    custom tools · team_* · compaction                    │
 ├─────────────────────────────────────────────────────────┤
-│  sdk/oma_sdk (Python SDK) — 可选客户端                    │
+│  sdk/sdk (Python SDK) — 可选客户端                    │
 │    anthropic base_url + httpx OMA-only 资源               │
 ├─────────────────────────────────────────────────────────┤
 │  Storage: SQLite (oma.db) + 本地 FS                      │
@@ -248,7 +248,7 @@ POST /v1/sessions/:id/files { path } → read workdir → fileblob      [T24]
 | /v1/oma/* 路由别名 | main index | `oma_aliases.go` + `router.go` | ✅ | T19 + T21 oauth/clawhub |
 | Rate limiting | CF RL namespaces | `internal/ratelimit/` | ✅ | T20 Go middleware |
 | Multi-tenant D1 分片 | `tenant-db` | 单 SQLite `tenant_id` | 🟡 | 够用至多 replica |
-| Python SDK (`oma-sdk`) | `packages/sdk` (Python subset) | `sdk/oma_sdk/` v0.1.0 | 🟡 | T22a ✅：anthropic `base_url` + httpx OMA-only 资源；example1–9 + pytest E2E；**未 PyPI 发布** |
+| Python SDK (`oma-sdk`) | `packages/sdk` (Python subset) | `sdk/sdk/` v0.1.0 | 🟡 | T22a ✅：anthropic `base_url` + httpx OMA-only 资源；example1–9 + pytest E2E；**未 PyPI 发布** |
 | TS SDK / `oma` CLI | `packages/sdk`, `packages/cli` | — | 🟡 | T22b defer：外部自动化可用 Python SDK 或 curl |
 | RL 子系统 | `rl/` | — | ⏭ | 独立产品线 |
 
@@ -359,7 +359,7 @@ POST /v1/sessions/:id/files { path } → read workdir → fileblob      [T24]
 | T19 | `/v1/oma/*` 别名 | main index | `oma_aliases.go` | ✅ |
 | T20 | Rate limiting | CF RL | Go middleware | ✅ |
 | T21 | 通用 oauth + clawhub | `oauth.ts`, `clawhub.ts` | `oauth_v1.go`, `clawhub.go`, `oauthflow/` | ✅ |
-| T22a | Python SDK (`oma-sdk`) | `packages/sdk` Python subset | `sdk/oma_sdk/` + example1–9 | ✅ 2026-07 |
+| T22a | Python SDK (`oma-sdk`) | `packages/sdk` Python subset | `sdk/sdk/` + example1–9 | ✅ 2026-07 |
 | T22b | TS SDK / `oma` CLI 发布 | `packages/sdk`, `packages/cli` | 独立发布 | Phase 3 defer |
 | T27 | Workspace backup/restore | `WorkspaceBackupService` | `internal/workdir/backup.go` + `022_workspace_backups.sql` | ✅ Phase B |
 | T28 | E2B/Daytona 沙箱适配器 | `adapters/e2b.ts`, `daytona.ts` | `internal/sandbox/e2b.go`, `daytona.go` + exec API | ✅ |
@@ -429,7 +429,7 @@ Client / Console / Python SDK (oma-sdk)
 | Session threads + subagent E2E | `session_threads.go`, `subagent_e2e_test.go` |
 | Resource mounter + outcome eval/supervisor | `resource_mounter.py`, `outcome_evaluator.py`, `outcome_supervisor.go` |
 | Internal API | `internal.go`, `smoke-internal-api-e2e.sh` |
-| Python SDK + Cookbook examples | `sdk/oma_sdk/`, `sdk/example/example1`–`example9`, `sdk/SDK-PLAN.md` |
+| Python SDK + Cookbook examples | `sdk/sdk/`, `sdk/example/example1`–`example9`, `sdk/SDK-PLAN.md` |
 | Cookbook Go CI probes | `.github/workflows/ci.yml` — `Test*Cookbook*`, `TestSreCookbook`, `TestSkillHarness` |
 | Fake harness CI | `OMA_FAKE_HARNESS=1`, `internal/harness/fake.go` |
 | Docker Compose | `deploy/docker-compose.yml`（platform + harness + auth） |
@@ -480,7 +480,7 @@ Client / Console / Python SDK (oma-sdk)
 - [x] **T19 (P3)** — `/v1/oma/*` 路由别名 — `oma_aliases.go` + `oma_aliases_test.go`
 - [x] **T20 (P3)** — Rate limiting middleware — `internal/ratelimit/` — Verify: `go test ./internal/ratelimit/...`
 - [x] **T21 (P3)** — 通用 `/v1/oauth` + clawhub — Verify: `go test ./internal/oauthflow/... ./internal/api/ -run 'OAuth|Clawhub'`
-- [x] **T22a (P3)** — Python SDK `oma-sdk` v0.1.0 — `sdk/oma_sdk/` + example1–9 — Verify: `sdk/tests/test.sh`, CI `Test*Cookbook*`
+- [x] **T22a (P3)** — Python SDK `oma-sdk` v0.1.0 — `sdk/sdk/` + example1–9 — Verify: `sdk/tests/test.sh`, CI `Test*Cookbook*`
 - [ ] **T22b (P3)** — TypeScript SDK / `oma` CLI 独立发布
 - [x] **T23 (P0'')** — Sandbox memory symlink + `.mnt/memory` + read-only — `internal/workdir/` + `sandbox_paths.py` — Verify: `go test ./internal/workdir/...`, `harness/tests/test_sandbox_paths.py`
 - [x] **T24 (P0'')** — `POST /v1/sessions/:id/files` promoteSandboxFile — `internal/api/session_files.go` — Verify: `go test ./internal/api/ -run PromoteSandbox`, `scripts/e2e/smoke-promote-sandbox-e2e.sh`

@@ -1,4 +1,4 @@
-# Operate in production migration
+﻿# Operate in production migration
 
 > **Source:** Anthropic `managed_agents/CMA_operate_in_production.ipynb`  
 > **Reference:** `@open-managed-agents` vault + MCP injection (no outbound `beta.webhooks`)  
@@ -18,7 +18,7 @@ Create a per-user vault and `static_bearer` credential for GitHub MCP, bind `vau
 |----|------|--------|----------|
 | **OP1** | `vault_ids` column + session create/list wire | ✅ | migration `021_sessions_vault_ids.sql`, `sessions.go` |
 | **OP2** | Vault-scoped MCP `FindActiveByMcpURLInVaults` + fallback | ✅ | `credentials.go`, `mcpproxy/target.go` |
-| **OP3** | SDK `sessions.create(vault_ids=...)` | ✅ | `oma_sdk/examples/sessions.py`, `test_sessions.py` |
+| **OP3** | SDK `sessions.create(vault_ids=...)` | ✅ | `sdk/examples/sessions.py`, `test_sessions.py` |
 | **OP4** | Go CI: vault MCP auth + two-vault isolation | ✅ | `TestMcpProxyVault*`, `TestOperateCookbook*` |
 | **OP5** | example10 + pytest | ✅ | `example10/operate_in_production.py` |
 | **OP6** | Webhooks (`beta.webhooks` / `session.status_idled`) | defer | SSE `wait_for_idle_status` — see below |
@@ -47,7 +47,7 @@ The cookbook §5 shows a FastAPI handler for `session.status_idled` that inspect
 For OMA self-hosted:
 
 1. **Today:** Poll `GET /v1/sessions/{id}` or tail SSE until `session.status_idle` + desired `stop_reason`.
-2. **SDK:** `wait_for_idle_status()` in `oma_sdk/cookbook.py`.
+2. **SDK:** `wait_for_idle_status()` in `sdk/cookbook.py`.
 3. **Not in scope:** `client.beta.webhooks.create` — see `sdk/SDK-PLAN.md` (out of scope; client-side unwrap only).
 
 Gate example3 Part B points here: `gate_human_in_the_loop_main.py`.

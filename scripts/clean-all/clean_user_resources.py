@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Script to delete all resources for a specific user in the OMA system.
 
@@ -16,12 +16,12 @@ from typing import Iterator, Optional
 import anthropic
 import httpx
 
-# Allow importing oma_sdk from meta-harness/sdk without a pip install.
+# Allow importing sdk from meta-harness/sdk without a pip install.
 _SDK_DIR = Path(__file__).resolve().parents[2] / "sdk"
 if str(_SDK_DIR) not in sys.path:
     sys.path.insert(0, str(_SDK_DIR))
 
-from oma_sdk.examples import AgentExamples
+from sdk.examples import AgentExamples
 
 _DEFAULT_BASE_URL = "http://127.0.0.1:8787"
 _DEFAULT_API_KEY = "dev-key"

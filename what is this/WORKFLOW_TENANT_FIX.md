@@ -1,4 +1,4 @@
-# Fix: Workflow Agents/Sessions Visibility in UI
+﻿# Fix: Workflow Agents/Sessions Visibility in UI
 
 ## Problem
 
@@ -38,7 +38,7 @@ Implemented end-to-end tenant propagation from UI request → workflow executor 
 
 ### Changes
 
-#### 1. OMA SDK (`oma-platform/sdk/oma_sdk/__init__.py`)
+#### 1. OMA SDK (`oma-platform/sdk/sdk/__init__.py`)
 
 Added optional `tenant_id` parameter to `OMAClient.__init__()`:
 
@@ -158,7 +158,7 @@ def _create_oma_resources_sync(
     environment_id: Optional[str],
     tenant_id: Optional[str] = None,  # NEW
 ) -> Tuple[...]:
-    from oma_sdk import OMAClient
+    from sdk import OMAClient
     client = OMAClient(tenant_id=tenant_id)  # NEW: pass tenant_id
     # ... create agents/sessions with tenant-aware client
 ```
@@ -296,7 +296,7 @@ For production deployments with stricter security requirements, consider:
 ## Files Modified
 
 ### Python (Workflow + Harness + SDK)
-- `oma-platform/sdk/oma_sdk/__init__.py`
+- `oma-platform/sdk/sdk/__init__.py`
 - `piPy-dynamic-workflows/packages/pi_dynamic_workflows/src/pi_dynamic_workflows/lib/workflow_bootstrap.py`
 - `piPy-dynamic-workflows/packages/pi_dynamic_workflows/src/pi_dynamic_workflows/lib/executor.py`
 - `piPy-dynamic-workflows/packages/pi_dynamic_workflows/src/pi_dynamic_workflows/api/routes.py`

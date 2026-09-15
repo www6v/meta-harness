@@ -89,6 +89,9 @@ importers:
       js-yaml:
         specifier: ^4.1.1
         version: 4.3.0
+      katex:
+        specifier: ^0.16.47
+        version: 0.16.47
       lowlight:
         specifier: ^3.3.0
         version: 3.3.0
@@ -119,9 +122,15 @@ importers:
       react-router:
         specifier: ^7.5.0
         version: 7.18.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      rehype-katex:
+        specifier: ^7.0.1
+        version: 7.0.1
       remark-gfm:
         specifier: ^4.0.1
         version: 4.0.1(supports-color@7.2.0)
+      remark-math:
+        specifier: ^6.0.0
+        version: 6.0.0(supports-color@7.2.0)
       shadcn:
         specifier: ^4.7.0
         version: 4.13.1(supports-color@7.2.0)(typescript@5.8.2)
@@ -793,6 +802,12 @@ packages:
   '@mermaid-js/parser@1.2.0':
     resolution: {integrity: sha512-oYPyv8A4As1yH5Bx+04iQEQxXuIQDe0GKCNSRgao6z8AM9jixXIfP0vsppRLvGf+nKIOb9/LdpWA4YuJiVvESA==}
 
+  '@meta-harness/acp-known-agents@file:packages/acp-known-agents':
+    resolution: {directory: packages/acp-known-agents, type: directory}
+
+  '@meta-harness/api-types@file:packages/api-types':
+    resolution: {directory: packages/api-types, type: directory}
+
   '@modelcontextprotocol/sdk@1.29.0':
     resolution: {integrity: sha512-zo37mZA9hJWpULgkRpowewez1y6ML5GsXJPY8FI0tBBCd77HEvza4jDqRKOXgHNn867PVGCyTdzqpz0izu5ZjQ==}
     engines: {node: '>=18'}
@@ -826,12 +841,6 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
-
-  '@meta-harness/acp-known-agents@file:packages/acp-known-agents':
-    resolution: {directory: packages/acp-known-agents, type: directory}
-
-  '@meta-harness/api-types@file:packages/api-types':
-    resolution: {directory: packages/api-types, type: directory}
 
   '@open-draft/deferred-promise@2.2.0':
     resolution: {integrity: sha512-CecwLWx3rhxVQF6V4bAgPS5t+So2sTbPgAzafKkVizyi7tlwpcFpdFqq+wqF2OwNBmqFuu6tOyouTuxgpMfzmA==}
@@ -3551,9 +3560,6 @@ packages:
   mdast-util-to-markdown@2.0.0:
     resolution: {integrity: sha512-Ov3aWCYpb31/SkHNRlREvSZsF9ETBW/rXw4PooawZO8qy2MviDq4TI6kxX6zFmGa/zUX36STKIC/IpASQk596w==}
 
-  mdast-util-to-markdown@2.1.0:
-    resolution: {integrity: sha512-SR2VnIEdVNCJbP6y7kVTJgPLifdr8WEU440fQec7qHoHOUz/oJ2jmNRqdDQ3rbiStOXb2mCDGTuwsK5OPUgYlQ==}
-
   mdast-util-to-markdown@2.1.2:
     resolution: {integrity: sha512-xj68wMTvGXVOKonmog6LwyJKrYXZPvlwabaryTjLh9LuvovB/KAH+kvi8Gjj+7rJjsFi23nkUxRQv1KqSroMqA==}
 
@@ -5330,6 +5336,10 @@ snapshots:
     dependencies:
       '@chevrotain/types': 11.1.2
 
+  '@meta-harness/acp-known-agents@file:packages/acp-known-agents': {}
+
+  '@meta-harness/api-types@file:packages/api-types': {}
+
   '@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@3.24.1)':
     dependencies:
       '@hono/node-server': 1.19.14(hono@4.12.30)
@@ -5376,10 +5386,6 @@ snapshots:
     dependencies:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
-
-  '@meta-harness/acp-known-agents@file:packages/acp-known-agents': {}
-
-  '@meta-harness/api-types@file:packages/api-types': {}
 
   '@open-draft/deferred-promise@2.2.0': {}
 
@@ -8127,7 +8133,7 @@ snapshots:
       devlop: 1.1.0
       longest-streak: 3.1.0
       mdast-util-from-markdown: 2.0.3(supports-color@7.2.0)
-      mdast-util-to-markdown: 2.1.0
+      mdast-util-to-markdown: 2.1.2
       unist-util-remove-position: 5.0.0
     transitivePeerDependencies:
       - supports-color
@@ -8211,17 +8217,6 @@ snapshots:
       - micromark-util-types
 
   mdast-util-to-markdown@2.0.0:
-    dependencies:
-      '@types/mdast': 4.0.4
-      '@types/unist': 3.0.3
-      longest-streak: 3.1.0
-      mdast-util-phrasing: 4.1.0
-      mdast-util-to-string: 4.0.0
-      micromark-util-decode-string: 2.0.1
-      unist-util-visit: 5.1.0
-      zwitch: 2.0.4
-
-  mdast-util-to-markdown@2.1.0:
     dependencies:
       '@types/mdast': 4.0.4
       '@types/unist': 3.0.3
@@ -8397,8 +8392,8 @@ snapshots:
       devlop: 1.1.0
       katex: 0.16.47
       micromark-factory-space: 2.0.0
-      micromark-util-character: 2.0.0
-      micromark-util-symbol: 2.0.0
+      micromark-util-character: 2.1.1
+      micromark-util-symbol: 2.0.1
       micromark-util-types: 2.0.0
 
   micromark-factory-destination@2.0.0:
@@ -9039,7 +9034,7 @@ snapshots:
       '@types/mdast': 4.0.4
       mdast-util-math: 3.0.0(supports-color@7.2.0)
       micromark-extension-math: 3.1.0
-      unified: 11.0.0
+      unified: 11.0.5
     transitivePeerDependencies:
       - supports-color
 

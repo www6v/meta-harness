@@ -1,4 +1,4 @@
-# Cookbook ↔ OMA 对齐 — 工程评审报告
+﻿# Cookbook ↔ OMA 对齐 — 工程评审报告
 
 > **目标：** 不是让 `data_analyst_agent.py`「能跑」，而是与 Anthropic cookbook notebook
 > (`managed_agents/data_analyst_agent.ipynb`) **API 与语义一致**，使示例成为 parity
@@ -18,7 +18,7 @@
 
 | 组件 | 位置 | 状态 |
 |------|------|------|
-| Files upload/list/download | `internal/api/files.go`, `oma_sdk/api/files.py` | ✅ |
+| Files upload/list/download | `internal/api/files.go`, `sdk/api/files.py` | ✅ |
 | ResourceResolver（file_id→content_base64） | `internal/harness/resources.go` | ✅ 仅读 **environment snapshot** |
 | Resource mounter | `harness/oma_adapter/resource_mounter.py` | ✅ |
 | Session outputs store | `internal/sessionoutputs/store.go` | ✅ 读 `SESSION_OUTPUTS_DIR/{tenant}/{session_id}/` |
@@ -60,7 +60,7 @@ Cookbook 7 步                    OMA 现状（2026-07-01）              Gap ID
 2. agents.create                  ✅ 基本对齐                          —
 3. beta.files.upload              httpx async，非 beta.files            F1 (P2, T20 deferred)
 4. sessions.create(resources=[])  scoped file copy + turn mount       ✅ S1
-5. events.send + stream           stream + end_turn（oma_sdk.cookbook） ✅ EV1
+5. events.send + stream           stream + end_turn（sdk.cookbook） ✅ EV1
 6. files.list(scope_id)+download  post-turn sync → Files API          ✅ O1
 7. archive + 复用 agent/env       wait_for_idle + archive             ✅ C1
 ```
@@ -176,7 +176,7 @@ Cookbook 依赖预装 pandas/plotly。OMA 存 config，harness **无 pip install
 `data_analyst_agent.py` 混了 parity demo、本地 fallback、错误处理。建议拆分：
 
 - `example/example1/data_analyst_agent.py` — cookbook 1:1（失败即暴露 gap）
-- `oma_sdk/examples/data_analyst.py` — `DataAnalystExamples.run_cookbook_flow()` 供 E2E 调用
+- `sdk/examples/data_analyst.py` — `DataAnalystExamples.run_cookbook_flow()` 供 E2E 调用
 
 ### 2B — SDK-PLAN 与 Go 实现漂移 [P2] (confidence: 9/10)
 
@@ -259,7 +259,7 @@ Lane C (tests, after T3+T5):
 | **T3** | P0 | 统一 outputs 路径 + turn 后 sync | `sandbox_paths.py`, `resource_mounter.py`, `machine.go` post-turn | ✅ | `workdir/sync_test.go`, `session_outputs_api_test.go` |
 | **T4** | P0 | Go integration test 复刻 cookbook §3–6 | `test/integration/data_analyst_cookbook_test.go`, `internal/integrationtest/` | ✅ | CI `TestDataAnalystCookbook` |
 | **T5** | P0 | 重写 `data_analyst_agent.py` 为 cookbook 1:1 | `sdk/example/example1/data_analyst_agent.py` | ✅ | 零 fallback 跑通（`OMA_DEV_FALLBACK` 默认 off） |
-| **T6** | P1 | `DataAnalystExamples` helper + E2E | `oma_sdk/examples/data_analyst.py`, `tests/test_data_analyst.py` | ⏸️ deferred | — |
+| **T6** | P1 | `DataAnalystExamples` helper + E2E | `sdk/examples/data_analyst.py`, `tests/test_data_analyst.py` | ⏸️ deferred | — |
 | **T7** | P1 | 更新 SDK-PLAN gap 状态 | `sdk/SDK-PLAN.md` | ✅ | doc review |
 
 ---
@@ -301,7 +301,7 @@ Lane C (tests, after T3+T5):
 | Session 资源挂载 | `sessions.create(resources=[...])` | create + T16 post-create CRUD | **低** |
 | 环境 packages | 容器构建时预装 | turn 前读 config 并 pip install（E1） | **低** |
 | 输出文件回收 | Files API `scope_id` 即可下载 | post-turn sync → Files API | **低** |
-| 事件流 | `sessions.events.stream()` 同步 SSE | `oma_sdk.cookbook.stream_until_end_turn` | 低 |
+| 事件流 | `sessions.events.stream()` 同步 SSE | `sdk.cookbook.stream_until_end_turn` | 低 |
 
 ---
 
@@ -315,7 +315,7 @@ P0 — 阻塞 data analyst 与 cookbook 对齐          ✅ 已交付
 
 P1 — API 形态对齐
 ├── F1/T20  client.beta.files 别名（deferred）
-├── EV1     events.stream + end_turn（oma_sdk.cookbook）     ✅
+├── EV1     events.stream + end_turn（sdk.cookbook）     ✅
 ├── E1      本地 harness 执行 environment.packages           ✅
 └── EV2     turn 超时可通过 session/agent 配置或 API 传递   open
 
@@ -351,7 +351,7 @@ P2 — 完整 Managed Agents parity
 | 2 agents.create | ✅ | |
 | 3 files.upload | ✅ | httpx async，非 `beta.files`（F1/T20 deferred） |
 | 4 sessions.create(resources=[]) | ✅ | scoped file copy + turn mount + T16 CRUD |
-| 5 events.send + stream | ✅ | `oma_sdk.cookbook.stream_until_end_turn` |
+| 5 events.send + stream | ✅ | `sdk.cookbook.stream_until_end_turn` |
 | 6 files.list(scope_id) + download | ✅ | post-turn sync；默认无磁盘 fallback |
 | 7 archive + 复用 agent/env | ✅ | `wait_for_idle_status` + archive |
 

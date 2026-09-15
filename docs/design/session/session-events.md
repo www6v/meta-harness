@@ -1,4 +1,4 @@
-# Session Events（会话事件）
+﻿# Session Events（会话事件）
 
 本文用通俗语言说明 meta-harness 中 **Session Event** 是什么、在系统里如何流转，以及客户端 / Console / Harness 各自该关注哪些事件类型。
 
@@ -211,7 +211,7 @@ Harness 内部 piPy 事件会通过 `harness/oma_adapter/emit.py` 映射为上�
 | `GET` | `/v1/sessions/:id/events` | 分页读取历史（`after_seq` / `next_page`） |
 | `GET` | `/v1/sessions/:id/events/stream` | SSE 实时订阅（`replay=1` 先回放再 tail） |
 
-SDK 对应封装：`oma_sdk.api.sessions.SessionEventsResource`（`send` / `list` / `stream`）。
+SDK 对应封装：`sdk.api.sessions.SessionEventsResource`（`send` / `list` / `stream`）。
 
 ### SSE  wire 格式
 
@@ -275,7 +275,7 @@ Console 按线程过滤同一份日志即可展示「Main / Worker」多个 Tab�
 | piPy → OMA | `harness/oma_adapter/emit.py` | 工具 / 消息事件映射 |
 | OMA → prompt | `harness/oma_adapter/project.py` | 历史投影与线程过滤 |
 | TS 类型定义 | `console/packages/api-types/src/types.ts` | `SessionEvent` 联合类型 |
-| Python SDK | `oma-sdk/oma_sdk/api/sessions.py` | `send` / `list` / `stream` |
+| Python SDK | `oma-sdk/sdk/api/sessions.py` | `send` / `list` / `stream` |
 
 ## 设计原则小结
 

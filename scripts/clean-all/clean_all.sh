@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 # Script to clean all user resources using the OMA SDK
 # This script calls clean_user_resources.py to delete agents, sessions,
 # environments, vaults, memory stores, skills, and files (/v1/files).
@@ -80,7 +80,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Ensure oma_sdk is importable by clean_user_resources.py
+# Ensure sdk is importable by clean_user_resources.py
 export PYTHONPATH="${ROOT_DIR}/sdk${PYTHONPATH:+:${PYTHONPATH}}"
 
 # Check if Python script exists

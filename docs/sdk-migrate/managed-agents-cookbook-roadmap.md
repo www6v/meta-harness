@@ -1,4 +1,4 @@
-# Managed Agents Cookbook — 迁移调研与开新路线图
+﻿# Managed Agents Cookbook — 迁移调研与开新路线图
 
 > **来源：** Anthropic [`managed_agents/`](https://github.com/anthropics/claude-cookbooks/tree/main/managed_agents)（本地路径：`claude-cookbooks-main/managed_agents/`）  
 > **目标：** 梳理全部 cookbook，对齐 meta-harness 现状，按「补齐系统明显短板 / 大缺口」优先级决定开新顺序。  
@@ -49,7 +49,7 @@ Fixture 地图：`example_data/OVERVIEW.md`（iterate / orchestrate / gate 等�
 | Cookbook | 状态 | OMA 证据 |
 |----------|------|----------|
 | **data_analyst** | ✅ | `sdk/example/example1/`；Go `TestDataAnalystCookbook*`；E1 env pip；[gap analysis](../sdk/data-analyst-cookbook-gap-analysis.md) |
-| **iterate** | ✅ | `sdk/example/example2/`；Go `TestIterateCookbookMultiTurn`；`oma_sdk/cookbook.py`；`tests/test_iterate_cookbook.py` |
+| **iterate** | ✅ | `sdk/example/example2/`；Go `TestIterateCookbookMultiTurn`；`sdk/cookbook.py`；`tests/test_iterate_cookbook.py` |
 | **gate HITL** | ✅ | `sdk/example/example3/`；Go `TestGateCookbook*`；Console HITL UI；[gate-hitl-gt1-gt3-migration.md](./gate-hitl-gt1-gt3-migration.md) |
 | **outcome grader** | ✅（2026-07-04） | `sdk/example/example4/`；Go `TestOutcomeGraderCookbook`；[outcome-grader-migration.md](./outcome-grader-migration.md) |
 

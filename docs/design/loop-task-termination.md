@@ -1,4 +1,4 @@
-# 循环任务的终止保障
+﻿# 循环任务的终止保障
 
 本文说明 meta-harness 中 **「循环反复跑」的任务** 在哪些场景会出现、系统如何 **保证它们最终会结束**，以及客户端如何可靠感知结束态。
 
@@ -458,7 +458,7 @@ WHERE id = ? AND status IN ('running', 'interrupted')
 
 ### 单轮对话（无 HITL）
 
-监听 SSE / 事件流，等待 **`session.status_idle` 且 `stop_reason.type == end_turn`**，且 `seq` 大于本轮起始 seq（避免 replay 误判）。SDK：`stream_until_end_turn`（`sdk/oma_sdk/cookbook.py`）。
+监听 SSE / 事件流，等待 **`session.status_idle` 且 `stop_reason.type == end_turn`**，且 `seq` 大于本轮起始 seq（避免 replay 误判）。SDK：`stream_until_end_turn`（`sdk/sdk/cookbook.py`）。
 
 ### HITL 自定义工具
 
@@ -512,7 +512,7 @@ SDK `StreamConfig.timeout_sec`、Eval trial timeout、Harness `TURN_TIMEOUT_SEC`
 | Pending 队列 | `internal/session/pending.go` |
 | Harness 单轮执行 | `harness/oma_adapter/turn.py` |
 | Harness 超时 | `harness/oma_adapter/main.py` |
-| SDK 等待 end_turn | `sdk/oma_sdk/cookbook.py` |
+| SDK 等待 end_turn | `sdk/sdk/cookbook.py` |
 | DB 孤儿恢复 | `internal/store/sessions.go` |
 | Schedule 触发 | `internal/api/wakeup.go`、`internal/api/wakeup_worker.go` |
 | Eval trial 推进 | `internal/eval/worker.go` |

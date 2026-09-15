@@ -1,4 +1,4 @@
-# meta-harness
+﻿# meta-harness
 
 > English: [README.md](./README.md)
 
@@ -319,7 +319,7 @@ uv run pytest tests/ -x
 ```
 
 ```python
-from oma_sdk import OMAClient
+from sdk import OMAClient
 
 client = OMAClient()  # 默认 http://localhost:8787
 agent = client.agents.create(name="hello", model={"id": "claude-sonnet-4-6"})

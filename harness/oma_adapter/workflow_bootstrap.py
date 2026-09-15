@@ -1,7 +1,7 @@
-"""OMA bootstrap for workflow executions.
+﻿"""OMA bootstrap for workflow executions.
 
 Creates workers + coordinator agents and a session on the OMA platform via
-``oma_sdk``, then configures ``SubAgentRuntime`` so workflow agent() steps
+``sdk``, then configures ``SubAgentRuntime`` so workflow agent() steps
 delegate through the harness sandbox.
 
 Implements the ``WorkflowBootstrap`` Protocol from
@@ -33,7 +33,7 @@ from pi_dynamic_workflows.lib.workflow_bootstrap import (
     WorkflowBootstrapContext,
 )
 
-from oma_adapter.workflow_oma_sdk import is_oma_sdk_available
+from oma_adapter.workflow_sdk import is_sdk_available
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +118,7 @@ def _resolve_workdir(session_id: str) -> str:
 
 def _platform_config() -> Tuple[str, str, str]:
     # Resolve base URL: OMA_API_BASE > OMA_PLATFORM_URL > localhost default.
-    # Keeps harness consistent with OMAClient (sdk/oma_sdk/__init__.py).
+    # Keeps harness consistent with OMAClient (sdk/sdk/__init__.py).
     base = (
         os.environ.get("OMA_API_BASE")
         or os.environ.get("OMA_PLATFORM_URL")
@@ -159,11 +159,11 @@ def _agent_to_snapshot(agent: Any) -> Any:
 def is_oma_bootstrap_enabled() -> bool:
     """True when we can create OMA entities AND configure the runtime bridge.
 
-    Requires both ``oma_sdk`` (to create agents/sessions) and
+    Requires both ``sdk`` (to create agents/sessions) and
     ``oma_adapter.subagent_bridge`` (to build the SubAgentRuntime that
     runs the agent steps).
     """
-    if not is_oma_sdk_available():
+    if not is_sdk_available():
         return False
     try:
         from oma_adapter.subagent_bridge import build_subagent_runtime  # noqa: F401
@@ -186,7 +186,7 @@ def _create_oma_resources_sync(
     tenant_id: Optional[str] = None,
 ) -> Tuple[str, str, Dict[str, str], Dict[str, Any], Dict[str, Any]]:
     """Create workers, coordinator, session via OMA SDK (sync)."""
-    from oma_sdk import OMAClient
+    from sdk import OMAClient
 
     exec_tag = execution_id[:8]
     prefix = f"workflow:{workflow_name[:32]}-{exec_tag}"
