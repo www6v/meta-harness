@@ -13,12 +13,13 @@ import (
 
 var testUpgrader = websocket.Upgrader{}
 
-// fakeDshGateway answers dsh-web-style RPC calls and serves WS events.
+// fakeDshGateway answers dsh-web-style RPC calls and serves WS events
+// using the Typert RPC protocol (/api/remote.mux).
 func fakeDshGateway(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("POST /api/session.create", func(
+	mux.HandleFunc("/api/", func(
 		w http.ResponseWriter, r *http.Request,
 	) {
 		var body dshClientRequest
@@ -26,47 +27,59 @@ func fakeDshGateway(t *testing.T) *httptest.Server {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"type":  "server-response",
-			"rpcId": body.RpcID,
-			"result": map[string]any{
-				"ok": true, "value": map[string]any{"sessionId": body.Payload.(map[string]any)["sessionId"]},
-			},
-		})
-	})
-
-	mux.HandleFunc("POST /api/session.prompt", func(
-		w http.ResponseWriter, r *http.Request,
-	) {
-		var body dshClientRequest
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		payload := body.Payload.(map[string]any)
-		if payload["sessionId"] == "" {
+		// Handle different RPC methods
+		switch body.Method {
+		case "session/create":
+			payload := body.Payload.(map[string]any)
+			args := payload["args"].(map[string]any)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"type":  "server-response",
+				"rpcId": body.RpcID,
+				"result": map[string]any{
+					"ok": true, "value": map[string]any{"sessionId": args["sessionId"]},
+				},
+			})
+		case "session/prompt":
+			payload := body.Payload.(map[string]any)
+			args := payload["args"].(map[string]any)
+			request := args["request"].(map[string]any)
+			if request["sessionId"] == "" {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"type":  "server-response",
+					"rpcId": body.RpcID,
+					"result": map[string]any{
+						"ok": false,
+						"error": map[string]any{
+							"code": "session-not-found", "message": "sessionId required",
+						},
+					},
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"type":  "server-response",
+				"rpcId": body.RpcID,
+				"result": map[string]any{
+					"ok": true, "value": map[string]any{"accepted": true},
+				},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"type":  "server-response",
 				"rpcId": body.RpcID,
 				"result": map[string]any{
 					"ok": false,
 					"error": map[string]any{
-						"code": "session-not-found", "message": "sessionId required",
+						"code": "not-found", "message": "method not found: " + body.Method,
 					},
 				},
 			})
-			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"type":  "server-response",
-			"rpcId": body.RpcID,
-			"result": map[string]any{
-				"ok": true, "value": map[string]any{"accepted": true},
-			},
-		})
 	})
 
-	mux.HandleFunc("/api/events.mux", func(
+	// Use the correct Typert RPC streaming endpoint
+	mux.HandleFunc("/api/remote.mux", func(
 		w http.ResponseWriter, r *http.Request,
 	) {
 		conn, err := testUpgrader.Upgrade(w, r, nil)
@@ -75,15 +88,63 @@ func fakeDshGateway(t *testing.T) *httptest.Server {
 		}
 		defer conn.Close()
 
-		// Push subscribed, assistant/message with usage, turn/end.
-		frames := []string{
-			`{"type":"server-request","rpcId":"","method":"","payload":{"type":"session/subscribed","sessionId":"","event":{}}}`,
-			`{"type":"server-request","rpcId":"x","method":"","payload":{"type":"session/event","sessionId":"sess-1","event":{"type":"assistant/message","seq":1,"data":{"message":{"content":[{"type":"text","text":"hello from dsh"}]},"usage":{"inputTokens":10,"outputTokens":5}}}}}`,
-			`{"type":"server-request","rpcId":"x","method":"","payload":{"type":"session/event","sessionId":"sess-1","event":{"type":"turn/end","seq":2,"data":{"reason":{"kind":"completed"}}}}}`,
+		// Read the open message from client
+		var openMsg struct {
+			Type     string `json:"type"`
+			StreamID string `json:"streamId"`
+			Endpoint string `json:"endpoint"`
+		}
+		if err := conn.ReadJSON(&openMsg); err != nil {
+			return
+		}
+		if openMsg.Type != "open" {
+			return
+		}
+		streamID := openMsg.StreamID
+
+		// Send item messages with session events using the new protocol format
+		frames := []map[string]any{
+			// assistant/message with usage
+			{
+				"type":     "item",
+				"streamId": streamID,
+				"value": map[string]any{
+					"type": "assistant/message",
+					"seq":  1,
+					"data": map[string]any{
+						"message": map[string]any{
+							"content": []map[string]any{
+								{"type": "text", "text": "hello from dsh"},
+							},
+						},
+						"usage": map[string]any{
+							"inputTokens":  10,
+							"outputTokens": 5,
+						},
+					},
+				},
+			},
+			// turn/end
+			{
+				"type":     "item",
+				"streamId": streamID,
+				"value": map[string]any{
+					"type": "turn/end",
+					"seq":  2,
+					"data": map[string]any{
+						"reason": map[string]any{"kind": "completed"},
+					},
+				},
+			},
 		}
 		for _, f := range frames {
-			_ = conn.WriteMessage(websocket.TextMessage, []byte(f))
+			_ = conn.WriteJSON(f)
 		}
+		// Send end message
+		_ = conn.WriteJSON(map[string]any{
+			"type":     "end",
+			"streamId": streamID,
+		})
 		// Hold until client disconnects.
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
@@ -154,29 +215,36 @@ func TestDeepSeekClient_RunTurn_GatewayDown(t *testing.T) {
 
 func TestDeepSeekClient_RunTurnStream(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/session.create", func(
+	mux.HandleFunc("/api/", func(
 		w http.ResponseWriter, r *http.Request,
 	) {
 		var body dshClientRequest
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"type":  "server-response",
-			"rpcId": body.RpcID,
-			"result": map[string]any{"ok": true, "value": nil},
-		})
+
+		switch body.Method {
+		case "session/create":
+			payload := body.Payload.(map[string]any)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"type":  "server-response",
+				"rpcId": body.RpcID,
+				"result": map[string]any{"ok": true, "value": nil},
+			})
+			_ = payload // avoid unused variable error
+		case "session/prompt":
+			payload := body.Payload.(map[string]any)
+			args := payload["args"].(map[string]any)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"type":  "server-response",
+				"rpcId": body.RpcID,
+				"result": map[string]any{"ok": true, "value": map[string]any{"accepted": true}},
+			})
+			_ = args // use args to avoid unused variable error
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
 	})
-	mux.HandleFunc("POST /api/session.prompt", func(
-		w http.ResponseWriter, r *http.Request,
-	) {
-		var body dshClientRequest
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"type":  "server-response",
-			"rpcId": body.RpcID,
-			"result": map[string]any{"ok": true, "value": map[string]any{"accepted": true}},
-		})
-	})
-	mux.HandleFunc("/api/events.mux", func(
+	// Use the correct Typert RPC streaming endpoint
+	mux.HandleFunc("/api/remote.mux", func(
 		w http.ResponseWriter, r *http.Request,
 	) {
 		conn, err := testUpgrader.Upgrade(w, r, nil)
@@ -184,17 +252,88 @@ func TestDeepSeekClient_RunTurnStream(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		frames := []string{
-			`{"type":"server-request","rpcId":"","method":"","payload":{"type":"session/subscribed","sessionId":"","event":{}}}`,
-			`{"type":"server-request","rpcId":"","method":"","payload":{"type":"session/event","sessionId":"sess-9","event":{"type":"assistant/chunk","seq":1,"data":{"chunk":{"type":"text-delta","text":"hel"}}}}}`,
-			`{"type":"server-request","rpcId":"","method":"","payload":{"type":"session/event","sessionId":"sess-9","event":{"type":"assistant/chunk","seq":2,"data":{"chunk":{"type":"text-delta","text":"lo"}}}}}`,
-			`{"type":"server-request","rpcId":"","method":"","payload":{"type":"session/event","sessionId":"other","event":{"type":"assistant/chunk","seq":1,"data":{}}}}`,
-			`{"type":"server-request","rpcId":"","method":"","payload":{"type":"session/event","sessionId":"sess-9","event":{"type":"assistant/message","seq":3,"data":{"message":{"content":[{"type":"text","text":"hello"}]},"usage":{"inputTokens":3,"outputTokens":2}}}}}`,
-			`{"type":"server-request","rpcId":"","method":"","payload":{"type":"session/event","sessionId":"sess-9","event":{"type":"turn/end","seq":4,"data":{"reason":{"kind":"completed"}}}}}`,
+
+		// Read the open message from client
+		var openMsg struct {
+			Type     string `json:"type"`
+			StreamID string `json:"streamId"`
+			Endpoint string `json:"endpoint"`
+		}
+		if err := conn.ReadJSON(&openMsg); err != nil {
+			return
+		}
+		if openMsg.Type != "open" {
+			return
+		}
+		streamID := openMsg.StreamID
+
+		// Send item messages with session events using the new protocol format
+		frames := []map[string]any{
+			// chunk "hel"
+			{
+				"type":     "item",
+				"streamId": streamID,
+				"value": map[string]any{
+					"type": "assistant/chunk",
+					"seq":  1,
+					"data": map[string]any{
+						"chunk": map[string]any{"type": "text-delta", "text": "hel"},
+					},
+				},
+			},
+			// chunk "lo"
+			{
+				"type":     "item",
+				"streamId": streamID,
+				"value": map[string]any{
+					"type": "assistant/chunk",
+					"seq":  2,
+					"data": map[string]any{
+						"chunk": map[string]any{"type": "text-delta", "text": "lo"},
+					},
+				},
+			},
+			// assistant/message
+			{
+				"type":     "item",
+				"streamId": streamID,
+				"value": map[string]any{
+					"type": "assistant/message",
+					"seq":  3,
+					"data": map[string]any{
+						"message": map[string]any{
+							"content": []map[string]any{
+								{"type": "text", "text": "hello"},
+							},
+						},
+						"usage": map[string]any{
+							"inputTokens":  3,
+							"outputTokens": 2,
+						},
+					},
+				},
+			},
+			// turn/end
+			{
+				"type":     "item",
+				"streamId": streamID,
+				"value": map[string]any{
+					"type": "turn/end",
+					"seq":  4,
+					"data": map[string]any{
+						"reason": map[string]any{"kind": "completed"},
+					},
+				},
+			},
 		}
 		for _, f := range frames {
-			_ = conn.WriteMessage(websocket.TextMessage, []byte(f))
+			_ = conn.WriteJSON(f)
 		}
+		// Send end message
+		_ = conn.WriteJSON(map[string]any{
+			"type":     "end",
+			"streamId": streamID,
+		})
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
 				return

@@ -6,17 +6,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-// DeepSeekClient calls the DeepSeek harness (dsh) web gateway: RPC at
-// POST /api/<method> with ClientRequest/ServerResponse envelopes and a
-// WebSocket event feed at /api/events.mux. All dsh protocol knowledge
-// is confined to this file.
+// DeepSeekClient calls the DeepSeek harness (dsh) web gateway using the
+// Typert RPC protocol:
+// - Unary calls: POST /api/<method> with ClientRequest/ServerResponse envelopes
+// - Streaming: WebSocket /api/remote.mux with open/item/end message types
 type DeepSeekClient struct {
 	// GatewayURL is the dsh web base URL, e.g. "http://dsh:3080".
 	GatewayURL string
@@ -24,10 +26,11 @@ type DeepSeekClient struct {
 	Token string
 	// HTTP overrides the transport; nil uses a 10-minute timeout client.
 	HTTP *http.Client
+	// authCookie caches the dsh browser-auth cookie; lazily initialized.
+	authCookie *dshAuthCookie
 }
 
-// dshClientRequest is the uplink wire envelope (apiproxy rpc.ts
-// ClientRequest): method is dotted, path == method.
+// dshClientRequest is the uplink wire envelope (Typert RPC ClientRequest).
 type dshClientRequest struct {
 	Type    string `json:"type"`
 	RpcID   string `json:"rpcId"`
@@ -51,24 +54,30 @@ type dshServerResponse struct {
 }
 
 // rpc posts one dotted-method call to POST /api/<method>.
+// The method name is sent both in the URL path and the request body.
 func (c *DeepSeekClient) rpc(
 	ctx context.Context,
 	method string,
 	payload map[string]any,
 	out any,
 ) error {
+	// Convert method name from "session.create" to "session/create" format
+	rpcMethod := strings.ReplaceAll(method, ".", "/")
+
 	body, err := json.Marshal(dshClientRequest{
 		Type:    "client-request",
 		RpcID:   randomOCID(),
-		Method:  method,
-		Payload: payload,
+		Method:  rpcMethod,
+		Payload: map[string]any{"args": payload}, // payload 必须包装在 args 中
 	})
 	if err != nil {
 		return err
 	}
+	// Trim trailing slash from GatewayURL to avoid double slashes in the path
+	baseURL := strings.TrimRight(c.GatewayURL, "/")
 	req, err := http.NewRequestWithContext(
 		ctx, http.MethodPost,
-		c.GatewayURL+"/api/"+method,
+		baseURL+"/api/"+rpcMethod,
 		bytes.NewReader(body),
 	)
 	if err != nil {
@@ -78,6 +87,10 @@ func (c *DeepSeekClient) rpc(
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
+	// Add dsh browser-auth cookie if available
+	if cookie := c.getAuthCookie(); cookie != nil {
+		req.Header.Set("Cookie", cookie.Name+"="+cookie.Value)
+	}
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return err
@@ -85,8 +98,9 @@ func (c *DeepSeekClient) rpc(
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		log.Printf("[DSH RPC ERROR] method=%s status=%d body=%s", rpcMethod, resp.StatusCode, strings.TrimSpace(string(raw)))
 		return fmt.Errorf("deepseek rpc %s status=%d: %s",
-			method, resp.StatusCode, strings.TrimSpace(string(raw)))
+			rpcMethod, resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	var env dshServerResponse
 	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
@@ -112,13 +126,43 @@ func (c *DeepSeekClient) httpClient() *http.Client {
 	return &http.Client{Timeout: 10 * time.Minute}
 }
 
+// getAuthCookie returns the cached dsh auth cookie, initializing it if needed.
+// Returns nil if the cookie cannot be loaded (e.g., credentials file missing).
+func (c *DeepSeekClient) getAuthCookie() *dshAuthCookie {
+	if c.authCookie != nil {
+		return c.authCookie
+	}
+	authority := extractAuthority(c.GatewayURL)
+	log.Printf("[DSH CLIENT] loading auth cookie for authority=%s", authority)
+	cookie, err := loadDshAuthCookie(authority)
+	if err != nil {
+		// Log the error but don't fail - the request will proceed without auth
+		// and may fail with 401 if the server requires it
+		log.Printf("[DSH CLIENT] failed to load auth cookie: %v", err)
+		return nil
+	}
+	log.Printf("[DSH CLIENT] auth cookie loaded successfully")
+	c.authCookie = cookie
+	return cookie
+}
+
 // ensureSession creates the dsh session on first use. session-conflict
 // means it already exists — not an error.
 func (c *DeepSeekClient) ensureSession(
 	ctx context.Context, sessionID string,
 ) error {
+	// session.create expects the request object wrapped in "request" field
+	// because the @Remote('create') decorator expects: create(request: SessionCreateRequest)
+	// cwd must be an absolute path (deepseek-harness requirement)
+	cwd, _ := os.Getwd()
+	if cwd == "" {
+		cwd = "."
+	}
 	err := c.rpc(ctx, "session.create", map[string]any{
-		"sessionId": sessionID,
+		"request": map[string]any{
+			"sessionId": sessionID,
+			"cwd":       cwd,
+		},
 	}, nil)
 	if err != nil && strings.Contains(err.Error(), "session-conflict") {
 		return nil
@@ -145,9 +189,12 @@ func (c *DeepSeekClient) RunTurn(
 	}
 
 	if err := c.rpc(ctx, "session.prompt", map[string]any{
-		"sessionId": req.SessionID,
-		"mode":      "queue",
-		"content":   []map[string]any{{"type": "text", "text": userText}},
+		"request": map[string]any{
+			"requestId": randomOCID(),
+			"sessionId": req.SessionID,
+			"mode":      "queue",
+			"content":   []map[string]any{{"type": "text", "text": userText}},
+		},
 	}, nil); err != nil {
 		logTurn("backend", "deepseek", "session", req.SessionID,
 			"duration_ms", time.Since(start).Milliseconds(), "error", err)
@@ -165,20 +212,35 @@ func (c *DeepSeekClient) RunTurn(
 	return TurnResponse{Events: events, Usage: usage}, nil
 }
 
-// dshServerRequest is one /api/events.mux text message.
-type dshServerRequest struct {
-	Type    string          `json:"type"`
-	RpcID   string          `json:"rpcId"`
-	Method  string          `json:"method"`
-	Payload json.RawMessage `json:"payload"`
+// remoteMuxOpenMessage is sent to open a logical stream on /api/remote.mux.
+type remoteMuxOpenMessage struct {
+	Type     string `json:"type"`
+	StreamID string `json:"streamId"`
+	Endpoint string `json:"endpoint"`
+	Payload  any    `json:"payload"`
 }
 
-// dshMuxFrame is the payload slot; mux aggregates ALL sessions, so the
-// client filters on SessionID.
-type dshMuxFrame struct {
-	Type      string          `json:"type"`
-	SessionID string          `json:"sessionId"`
-	Event     dshSessionEvent `json:"event"`
+// remoteMuxItemMessage is received for each stream item.
+type remoteMuxItemMessage struct {
+	Type     string          `json:"type"`
+	StreamID string          `json:"streamId"`
+	Value    json.RawMessage `json:"value,omitempty"`
+}
+
+// remoteMuxEndMessage signals the end of a stream.
+type remoteMuxEndMessage struct {
+	Type     string `json:"type"`
+	StreamID string `json:"streamId"`
+}
+
+// remoteMuxErrorMessage signals a stream error.
+type remoteMuxErrorMessage struct {
+	Type     string `json:"type"`
+	StreamID string `json:"streamId"`
+	Error    struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 // dshSessionEvent is the dsh SessionEvent envelope
@@ -189,41 +251,82 @@ type dshSessionEvent struct {
 	Data json.RawMessage `json:"data"`
 }
 
-// collectTurn dials the WS mux, collects events for this session until
-// turn/end, and returns mapped oma events plus token usage.
+// collectTurn dials the WS mux, opens a session/follow stream, collects
+// events until turn/end, and returns mapped oma events plus token usage.
 func (c *DeepSeekClient) collectTurn(
 	ctx context.Context,
 	sessionID string,
 ) ([]json.RawMessage, *TurnUsage, error) {
-	wsURL := strings.Replace(c.GatewayURL, "http", "ws", 1) +
-		"/api/events.mux"
+	// Use the correct Typert RPC streaming endpoint
+	baseURL := strings.TrimRight(c.GatewayURL, "/")
+	wsURL := strings.Replace(baseURL, "http", "ws", 1) + "/api/remote.mux"
 	header := http.Header{}
 	if c.Token != "" {
 		header.Set("Authorization", "Bearer "+c.Token)
 	}
+	// Add dsh browser-auth cookie if available
+	if cookie := c.getAuthCookie(); cookie != nil {
+		header.Set("Cookie", cookie.Name+"="+cookie.Value)
+	}
 	dialer := websocket.DefaultDialer
 	conn, _, err := dialer.DialContext(ctx, wsURL, header)
 	if err != nil {
-		return nil, nil, fmt.Errorf("deepseek events dial: %w", err)
+		return nil, nil, fmt.Errorf("deepseek remote.mux dial: %w", err)
 	}
 	defer conn.Close()
 
-	msgID := randomOCID()
+	streamID := randomOCID()
+
+	// Open the session/follow stream
+	// session/follow expects: Payload.args.request.address (SessionFollowRequest)
+	// address must be { kind: "session", sessionId: "..." } format
+	openMsg := remoteMuxOpenMessage{
+		Type:     "open",
+		StreamID: streamID,
+		Endpoint: "session/follow",
+		Payload: map[string]any{
+			"args": map[string]any{
+				"request": map[string]any{
+					"address": map[string]any{
+						"kind":      "session",
+						"sessionId": sessionID,
+					},
+				},
+			},
+		},
+	}
+	if err := conn.WriteJSON(openMsg); err != nil {
+		return nil, nil, fmt.Errorf("remote.mux open: %w", err)
+	}
+
 	var events []json.RawMessage
 	var usage *TurnUsage
 	var accumulated strings.Builder
 	emitted := false
+	msgID := randomOCID()
 
 	for {
 		type readResult struct {
-			req dshServerRequest
-			err error
+			msgType string
+			data    json.RawMessage
+			err     error
 		}
 		ch := make(chan readResult, 1)
 		go func() {
-			var sr dshServerRequest
-			err := conn.ReadJSON(&sr)
-			ch <- readResult{sr, err}
+			var rawMsg json.RawMessage
+			err := conn.ReadJSON(&rawMsg)
+			if err != nil {
+				ch <- readResult{"", nil, err}
+				return
+			}
+			var msg struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(rawMsg, &msg); err != nil {
+				ch <- readResult{"", nil, err}
+				return
+			}
+			ch <- readResult{msg.Type, rawMsg, nil}
 		}()
 
 		select {
@@ -234,139 +337,202 @@ func (c *DeepSeekClient) collectTurn(
 			if r.err != nil {
 				return events, usage, fmt.Errorf("ws read: %w", r.err)
 			}
-			sr := r.req
-			if sr.Type != "server-request" {
-				continue
-			}
-			var frame dshMuxFrame
-			if err := json.Unmarshal(sr.Payload, &frame); err != nil {
-				continue
-			}
-			if frame.SessionID != sessionID {
-				continue
-			}
-			if frame.Type == "stream/error" {
-				return events, usage, fmt.Errorf("stream error from dsh")
-			}
-			if frame.Type != "session/event" {
-				continue
-			}
 
-			ev := frame.Event
-			switch ev.Type {
-			case "assistant/chunk":
-				var d struct {
-					Chunk struct {
-						Type string `json:"type"`
-						Text string `json:"text"`
-					} `json:"chunk"`
-				}
-				if json.Unmarshal(ev.Data, &d) != nil ||
-					d.Chunk.Type != "text-delta" || d.Chunk.Text == "" {
+			switch r.msgType {
+			case "item":
+				var item remoteMuxItemMessage
+				if err := json.Unmarshal(r.data, &item); err != nil {
 					continue
 				}
-				accumulated.WriteString(d.Chunk.Text)
-				mapped, mapErr := agentMessageEvent(randomOCID(), msgID, accumulated.String())
-				if mapErr != nil {
-					return events, usage, mapErr
-				}
-				events = append(events, mapped)
-				emitted = true
-
-			case "tool/call":
-				var d struct {
-					Name string `json:"name"`
-				}
-				if json.Unmarshal(ev.Data, &d) != nil {
+				if item.StreamID != streamID {
 					continue
 				}
-				mapped, mapErr := agentToolUseEvent(d.Name, "")
-				if mapErr != nil {
-					return events, usage, mapErr
-				}
-				events = append(events, mapped)
-
-			case "tool/result":
-				var d struct {
-					Error *struct {
-						Name string `json:"name"`
-					} `json:"error"`
-				}
-				if json.Unmarshal(ev.Data, &d) != nil {
+				// Item value contains the session event
+				ev, parseErr := parseSessionEventFromRemote(item.Value)
+				if parseErr != nil {
 					continue
 				}
-				content := "(completed)"
-				if d.Error != nil {
-					content = "(failed: " + d.Error.Name + ")"
+				mapped, mapUsage, done := c.processSessionEvent(ev, sessionID, &accumulated, &emitted, msgID)
+				if mapUsage != nil {
+					usage = mapUsage
 				}
-				mapped, mapErr := agentToolResultEvent("", content)
-				if mapErr != nil {
-					return events, usage, mapErr
+				if done {
+					return events, usage, nil
 				}
-				events = append(events, mapped)
+				if mapped != nil {
+					events = append(events, mapped...)
+				}
 
-			case "assistant/message":
-				var d struct {
-					Message struct {
-						Content []struct {
-							Type string `json:"type"`
-							Text string `json:"text"`
-						} `json:"content"`
-					} `json:"message"`
-					Usage *struct {
-						InputTokens  int `json:"inputTokens"`
-						OutputTokens int `json:"outputTokens"`
-					} `json:"usage"`
-				}
-				if json.Unmarshal(ev.Data, &d) != nil {
+			case "end":
+				var end remoteMuxEndMessage
+				if err := json.Unmarshal(r.data, &end); err != nil {
 					continue
 				}
-				var sb strings.Builder
-				for _, part := range d.Message.Content {
-					if part.Type == "text" {
-						sb.WriteString(part.Text)
-					}
+				if end.StreamID != streamID {
+					continue
 				}
-				if sb.Len() > 0 {
-					mapped, mapErr := agentMessageEvent(randomOCID(), msgID, sb.String())
-					if mapErr != nil {
-						return events, usage, mapErr
-					}
-					events = append(events, mapped)
-					emitted = true
-				}
-				if d.Usage != nil {
-					usage = &TurnUsage{
-						InputTokens:  d.Usage.InputTokens,
-						OutputTokens: d.Usage.OutputTokens,
-					}
-				}
-
-			case "turn/end":
-				var d struct {
-					Reason struct {
-						Kind string `json:"kind"`
-					} `json:"reason"`
-				}
-				_ = json.Unmarshal(ev.Data, &d)
-				if !emitted {
+				// Stream ended - emit final accumulated text if any
+				if !emitted && accumulated.Len() > 0 {
 					mapped, mapErr := agentMessageEvent(randomOCID(), msgID, accumulated.String())
-					if mapErr != nil {
-						return events, usage, mapErr
+					if mapErr == nil {
+						events = append(events, mapped)
 					}
-					events = append(events, mapped)
-				}
-				if d.Reason.Kind == "error" {
-					return events, usage, fmt.Errorf("deepseek turn ended with error")
 				}
 				return events, usage, nil
+
+			case "error":
+				var errMsg remoteMuxErrorMessage
+				if err := json.Unmarshal(r.data, &errMsg); err != nil {
+					continue
+				}
+				if errMsg.StreamID != streamID {
+					continue
+				}
+				return events, usage, fmt.Errorf("remote.mux error: %s: %s",
+					errMsg.Error.Code, errMsg.Error.Message)
 			}
 		}
 	}
 }
 
+// parseSessionEventFromRemote extracts a session event from the remote.mux item value.
+// The item value contains the forwarded Cordis event with session event data.
+func parseSessionEventFromRemote(value json.RawMessage) (*dshSessionEvent, error) {
+	// The value from remote.mux item is the event payload directly
+	// It may be wrapped in different ways depending on the event type
+	var ev dshSessionEvent
+	if err := json.Unmarshal(value, &ev); err != nil {
+		// Try parsing as a direct session event
+		return nil, err
+	}
+	return &ev, nil
+}
+
+// processSessionEvent maps a dsh session event to OMA events.
+func (c *DeepSeekClient) processSessionEvent(
+	ev *dshSessionEvent,
+	sessionID string,
+	accumulated *strings.Builder,
+	emitted *bool,
+	msgID string,
+) (events []json.RawMessage, usage *TurnUsage, done bool) {
+	switch ev.Type {
+	case "assistant/chunk":
+		var d struct {
+			Chunk struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"chunk"`
+		}
+		if json.Unmarshal(ev.Data, &d) != nil ||
+			d.Chunk.Type != "text-delta" || d.Chunk.Text == "" {
+			return nil, nil, false
+		}
+		accumulated.WriteString(d.Chunk.Text)
+		mapped, mapErr := agentMessageEvent(randomOCID(), msgID, accumulated.String())
+		if mapErr != nil {
+			return nil, nil, false
+		}
+		*emitted = true
+		return []json.RawMessage{mapped}, nil, false
+
+	case "tool/call":
+		var d struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(ev.Data, &d) != nil {
+			return nil, nil, false
+		}
+		mapped, mapErr := agentToolUseEvent(d.Name, "")
+		if mapErr != nil {
+			return nil, nil, false
+		}
+		return []json.RawMessage{mapped}, nil, false
+
+	case "tool/result":
+		var d struct {
+			Error *struct {
+				Name string `json:"name"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(ev.Data, &d) != nil {
+			return nil, nil, false
+		}
+		content := "(completed)"
+		if d.Error != nil {
+			content = "(failed: " + d.Error.Name + ")"
+		}
+		mapped, mapErr := agentToolResultEvent("", content)
+		if mapErr != nil {
+			return nil, nil, false
+		}
+		return []json.RawMessage{mapped}, nil, false
+
+	case "assistant/message":
+		var d struct {
+			Message struct {
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"message"`
+			Usage *struct {
+				InputTokens  int `json:"inputTokens"`
+				OutputTokens int `json:"outputTokens"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal(ev.Data, &d) != nil {
+			return nil, nil, false
+		}
+		var sb strings.Builder
+		for _, part := range d.Message.Content {
+			if part.Type == "text" {
+				sb.WriteString(part.Text)
+			}
+		}
+		var result []json.RawMessage
+		if sb.Len() > 0 {
+			mapped, mapErr := agentMessageEvent(randomOCID(), msgID, sb.String())
+			if mapErr != nil {
+				return nil, nil, false
+			}
+			result = append(result, mapped)
+			*emitted = true
+		}
+		var mapUsage *TurnUsage
+		if d.Usage != nil {
+			mapUsage = &TurnUsage{
+				InputTokens:  d.Usage.InputTokens,
+				OutputTokens: d.Usage.OutputTokens,
+			}
+		}
+		return result, mapUsage, false
+
+	case "turn/end":
+		var d struct {
+			Reason struct {
+				Kind string `json:"kind"`
+			} `json:"reason"`
+		}
+		_ = json.Unmarshal(ev.Data, &d)
+		if !*emitted && accumulated.Len() > 0 {
+			mapped, mapErr := agentMessageEvent(randomOCID(), msgID, accumulated.String())
+			if mapErr == nil {
+				events = append(events, mapped)
+			}
+		}
+		if d.Reason.Kind == "error" {
+			// Return with error indication
+			return events, nil, true
+		}
+		return events, nil, true
+	}
+
+	return nil, nil, false
+}
+
 // RunTurnStream implements StreamingClient. It prompts the dsh session
-// over RPC, then consumes /api/events.mux until turn/end, mapping each
+// over RPC, then consumes /api/remote.mux until turn/end, mapping each
 // SessionEvent onto the oma vocabulary as it arrives.
 func (c *DeepSeekClient) RunTurnStream(
 	ctx context.Context,
@@ -384,40 +550,84 @@ func (c *DeepSeekClient) RunTurnStream(
 	}
 
 	if err := c.rpc(ctx, "session.prompt", map[string]any{
-		"sessionId": req.SessionID,
-		"mode":      "queue",
-		"content":   []map[string]any{{"type": "text", "text": userText}},
+		"request": map[string]any{
+			"requestId": randomOCID(),
+			"sessionId": req.SessionID,
+			"mode":      "queue",
+			"content":   []map[string]any{{"type": "text", "text": userText}},
+		},
 	}, nil); err != nil {
 		return err
 	}
 
-	wsURL := strings.Replace(c.GatewayURL, "http", "ws", 1) +
-		"/api/events.mux"
+	// Use the correct Typert RPC streaming endpoint
+	baseURL := strings.TrimRight(c.GatewayURL, "/")
+	wsURL := strings.Replace(baseURL, "http", "ws", 1) + "/api/remote.mux"
 	header := http.Header{}
 	if c.Token != "" {
 		header.Set("Authorization", "Bearer "+c.Token)
 	}
+	// Add dsh browser-auth cookie if available
+	if cookie := c.getAuthCookie(); cookie != nil {
+		header.Set("Cookie", cookie.Name+"="+cookie.Value)
+	}
 	dialer := websocket.DefaultDialer
 	conn, _, err := dialer.DialContext(ctx, wsURL, header)
 	if err != nil {
-		return fmt.Errorf("deepseek events dial: %w", err)
+		return fmt.Errorf("deepseek remote.mux dial: %w", err)
 	}
 	defer conn.Close()
 
-	msgID := randomOCID()
+	streamID := randomOCID()
+
+	// Open the session/follow stream
+	// session/follow expects: Payload.args.request.address (SessionFollowRequest)
+	// address must be { kind: "session", sessionId: "..." } format
+	openMsg := remoteMuxOpenMessage{
+		Type:     "open",
+		StreamID: streamID,
+		Endpoint: "session/follow",
+		Payload: map[string]any{
+			"args": map[string]any{
+				"request": map[string]any{
+					"address": map[string]any{
+						"kind":      "session",
+						"sessionId": req.SessionID,
+					},
+				},
+			},
+		},
+	}
+	if err := conn.WriteJSON(openMsg); err != nil {
+		return fmt.Errorf("remote.mux open: %w", err)
+	}
+
 	var accumulated strings.Builder
 	emitted := false
+	msgID := randomOCID()
 
 	for {
 		type readResult struct {
-			req dshServerRequest
-			err error
+			msgType string
+			data    json.RawMessage
+			err     error
 		}
 		ch := make(chan readResult, 1)
 		go func() {
-			var sr dshServerRequest
-			err := conn.ReadJSON(&sr)
-			ch <- readResult{sr, err}
+			var rawMsg json.RawMessage
+			err := conn.ReadJSON(&rawMsg)
+			if err != nil {
+				ch <- readResult{"", nil, err}
+				return
+			}
+			var msg struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(rawMsg, &msg); err != nil {
+				ch <- readResult{"", nil, err}
+				return
+			}
+			ch <- readResult{msg.Type, rawMsg, nil}
 		}()
 
 		select {
@@ -428,124 +638,33 @@ func (c *DeepSeekClient) RunTurnStream(
 			if r.err != nil {
 				return fmt.Errorf("ws read: %w", r.err)
 			}
-			sr := r.req
-			if sr.Type != "server-request" {
-				continue
-			}
-			var frame dshMuxFrame
-			if err := json.Unmarshal(sr.Payload, &frame); err != nil {
-				continue
-			}
-			if frame.SessionID != req.SessionID {
-				continue
-			}
-			if frame.Type == "stream/error" {
-				return fmt.Errorf("stream error from dsh")
-			}
-			if frame.Type != "session/event" {
-				continue
-			}
 
-			ev := frame.Event
-			switch ev.Type {
-			case "assistant/chunk":
-				var d struct {
-					Chunk struct {
-						Type string `json:"type"`
-						Text string `json:"text"`
-					} `json:"chunk"`
-				}
-				if json.Unmarshal(ev.Data, &d) != nil ||
-					d.Chunk.Type != "text-delta" || d.Chunk.Text == "" {
+			switch r.msgType {
+			case "item":
+				var item remoteMuxItemMessage
+				if err := json.Unmarshal(r.data, &item); err != nil {
 					continue
 				}
-				accumulated.WriteString(d.Chunk.Text)
-				mapped, mapErr := agentMessageEvent(randomOCID(), msgID, accumulated.String())
-				if mapErr != nil {
-					return mapErr
-				}
-				if err := onEvent(mapped); err != nil {
-					return err
-				}
-				emitted = true
-
-			case "tool/call":
-				var d struct {
-					Name string `json:"name"`
-				}
-				if json.Unmarshal(ev.Data, &d) != nil {
+				if item.StreamID != streamID {
 					continue
 				}
-				mapped, mapErr := agentToolUseEvent(d.Name, "")
-				if mapErr != nil {
-					return mapErr
+				ev, parseErr := parseSessionEventFromRemote(item.Value)
+				if parseErr != nil {
+					continue
 				}
-				if err := onEvent(mapped); err != nil {
+				if err := c.emitSessionEvent(ev, &accumulated, &emitted, msgID, onEvent); err != nil {
 					return err
 				}
 
-			case "tool/result":
-				var d struct {
-					Error *struct {
-						Name string `json:"name"`
-					} `json:"error"`
-				}
-				if json.Unmarshal(ev.Data, &d) != nil {
+			case "end":
+				var end remoteMuxEndMessage
+				if err := json.Unmarshal(r.data, &end); err != nil {
 					continue
 				}
-				content := "(completed)"
-				if d.Error != nil {
-					content = "(failed: " + d.Error.Name + ")"
-				}
-				mapped, mapErr := agentToolResultEvent("", content)
-				if mapErr != nil {
-					return mapErr
-				}
-				if err := onEvent(mapped); err != nil {
-					return err
-				}
-
-			case "assistant/message":
-				var d struct {
-					Message struct {
-						Content []struct {
-							Type string `json:"type"`
-							Text string `json:"text"`
-						} `json:"content"`
-					} `json:"message"`
-					Usage *struct {
-						InputTokens  int `json:"inputTokens"`
-						OutputTokens int `json:"outputTokens"`
-					} `json:"usage"`
-				}
-				if json.Unmarshal(ev.Data, &d) != nil {
+				if end.StreamID != streamID {
 					continue
 				}
-				var sb strings.Builder
-				for _, part := range d.Message.Content {
-					if part.Type == "text" {
-						sb.WriteString(part.Text)
-					}
-				}
-				if sb.Len() > 0 {
-					mapped, mapErr := agentMessageEvent(randomOCID(), msgID, sb.String())
-					if mapErr != nil {
-						return mapErr
-					}
-					if err := onEvent(mapped); err != nil {
-						return err
-					}
-					emitted = true
-				}
-
-			case "turn/end":
-				var d struct {
-					Reason struct {
-						Kind string `json:"kind"`
-					} `json:"reason"`
-				}
-				_ = json.Unmarshal(ev.Data, &d)
-				if !emitted {
+				if !emitted && accumulated.Len() > 0 {
 					mapped, mapErr := agentMessageEvent(randomOCID(), msgID, accumulated.String())
 					if mapErr != nil {
 						return mapErr
@@ -558,11 +677,121 @@ func (c *DeepSeekClient) RunTurnStream(
 					"stream", true,
 					"duration_ms", time.Since(start).Milliseconds(),
 					"chars", accumulated.Len())
-				if d.Reason.Kind == "error" {
-					return fmt.Errorf("deepseek turn ended with error")
-				}
 				return nil
+
+			case "error":
+				var errMsg remoteMuxErrorMessage
+				if err := json.Unmarshal(r.data, &errMsg); err != nil {
+					continue
+				}
+				if errMsg.StreamID != streamID {
+					continue
+				}
+				return fmt.Errorf("remote.mux error: %s: %s",
+					errMsg.Error.Code, errMsg.Error.Message)
 			}
 		}
 	}
+}
+
+// emitSessionEvent processes and emits a single session event to the handler.
+func (c *DeepSeekClient) emitSessionEvent(
+	ev *dshSessionEvent,
+	accumulated *strings.Builder,
+	emitted *bool,
+	msgID string,
+	onEvent EventHandler,
+) error {
+	switch ev.Type {
+	case "assistant/chunk":
+		var d struct {
+			Chunk struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"chunk"`
+		}
+		if json.Unmarshal(ev.Data, &d) != nil ||
+			d.Chunk.Type != "text-delta" || d.Chunk.Text == "" {
+			return nil
+		}
+		accumulated.WriteString(d.Chunk.Text)
+		mapped, mapErr := agentMessageEvent(randomOCID(), msgID, accumulated.String())
+		if mapErr != nil {
+			return mapErr
+		}
+		if err := onEvent(mapped); err != nil {
+			return err
+		}
+		*emitted = true
+
+	case "tool/call":
+		var d struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(ev.Data, &d) != nil {
+			return nil
+		}
+		mapped, mapErr := agentToolUseEvent(d.Name, "")
+		if mapErr != nil {
+			return mapErr
+		}
+		if err := onEvent(mapped); err != nil {
+			return err
+		}
+
+	case "tool/result":
+		var d struct {
+			Error *struct {
+				Name string `json:"name"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(ev.Data, &d) != nil {
+			return nil
+		}
+		content := "(completed)"
+		if d.Error != nil {
+			content = "(failed: " + d.Error.Name + ")"
+		}
+		mapped, mapErr := agentToolResultEvent("", content)
+		if mapErr != nil {
+			return mapErr
+		}
+		if err := onEvent(mapped); err != nil {
+			return err
+		}
+
+	case "assistant/message":
+		var d struct {
+			Message struct {
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(ev.Data, &d) != nil {
+			return nil
+		}
+		var sb strings.Builder
+		for _, part := range d.Message.Content {
+			if part.Type == "text" {
+				sb.WriteString(part.Text)
+			}
+		}
+		if sb.Len() > 0 {
+			mapped, mapErr := agentMessageEvent(randomOCID(), msgID, sb.String())
+			if mapErr != nil {
+				return mapErr
+			}
+			if err := onEvent(mapped); err != nil {
+				return err
+			}
+			*emitted = true
+		}
+
+	case "turn/end":
+		// Turn end is handled by the stream end message
+	}
+
+	return nil
 }
