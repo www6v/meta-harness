@@ -243,6 +243,13 @@ type remoteMuxErrorMessage struct {
 	} `json:"error"`
 }
 
+// sessionFollowFrame is the frame structure returned by session/follow stream
+// Format: { type: "event", event: { type, seq, data } } or { type: "assistant-stream", frame: ... }
+type sessionFollowFrame struct {
+	Type  string          `json:"type"`
+	Event json.RawMessage `json:"event"`
+}
+
 // dshSessionEvent is the dsh SessionEvent envelope
 // (packages/core/session/src/types.ts): { type, seq, time, data }.
 type dshSessionEvent struct {
@@ -335,6 +342,7 @@ func (c *DeepSeekClient) collectTurn(
 			return events, usage, ctx.Err()
 		case r := <-ch:
 			if r.err != nil {
+				log.Printf("[DSH CLIENT] WebSocket read error: %v", r.err)
 				return events, usage, fmt.Errorf("ws read: %w", r.err)
 			}
 
@@ -348,15 +356,23 @@ func (c *DeepSeekClient) collectTurn(
 					continue
 				}
 				// Item value contains the session event
+				log.Printf("[DSH CLIENT] Received item: %s", string(item.Value))
 				ev, parseErr := parseSessionEventFromRemote(item.Value)
 				if parseErr != nil {
+					log.Printf("[DSH CLIENT] Parse error: %v", parseErr)
 					continue
 				}
+				log.Printf("[DSH CLIENT] Parsed event type: %s", ev.Type)
 				mapped, mapUsage, done := c.processSessionEvent(ev, sessionID, &accumulated, &emitted, msgID)
 				if mapUsage != nil {
 					usage = mapUsage
 				}
 				if done {
+					log.Printf("[DSH CLIENT] Turn completed (done=true), closing WebSocket")
+					// Close the WebSocket connection to signal turn end
+					conn.Close()
+					// Small delay to ensure close is processed
+					time.Sleep(100 * time.Millisecond)
 					return events, usage, nil
 				}
 				if mapped != nil {
@@ -396,14 +412,23 @@ func (c *DeepSeekClient) collectTurn(
 }
 
 // parseSessionEventFromRemote extracts a session event from the remote.mux item value.
-// The item value contains the forwarded Cordis event with session event data.
+// session/follow returns frames with structure: { type: "event", event: { type, seq, data } }
 func parseSessionEventFromRemote(value json.RawMessage) (*dshSessionEvent, error) {
-	// The value from remote.mux item is the event payload directly
-	// It may be wrapped in different ways depending on the event type
+	// First, try to parse as session/follow frame
+	var frame sessionFollowFrame
+	if err := json.Unmarshal(value, &frame); err == nil && frame.Type == "event" {
+		// Extract the inner session event
+		var ev dshSessionEvent
+		if err := json.Unmarshal(frame.Event, &ev); err != nil {
+			return nil, fmt.Errorf("parse inner event: %w", err)
+		}
+		return &ev, nil
+	}
+
+	// Fallback: try to parse as direct session event (for backward compatibility)
 	var ev dshSessionEvent
 	if err := json.Unmarshal(value, &ev); err != nil {
-		// Try parsing as a direct session event
-		return nil, err
+		return nil, fmt.Errorf("parse session event: %w", err)
 	}
 	return &ev, nil
 }
@@ -469,6 +494,7 @@ func (c *DeepSeekClient) processSessionEvent(
 		return []json.RawMessage{mapped}, nil, false
 
 	case "assistant/message":
+		log.Printf("[DSH CLIENT] Raw assistant/message data: %s", string(ev.Data))
 		var d struct {
 			Message struct {
 				Content []struct {
@@ -481,7 +507,9 @@ func (c *DeepSeekClient) processSessionEvent(
 				OutputTokens int `json:"outputTokens"`
 			} `json:"usage"`
 		}
-		if json.Unmarshal(ev.Data, &d) != nil {
+		if err := json.Unmarshal(ev.Data, &d); err != nil {
+			log.Printf("[DSH CLIENT] assistant/message parse error: %v", err)
+			log.Printf("[DSH CLIENT] raw data: %s", string(ev.Data))
 			return nil, nil, false
 		}
 		var sb strings.Builder
@@ -506,7 +534,16 @@ func (c *DeepSeekClient) processSessionEvent(
 				OutputTokens: d.Usage.OutputTokens,
 			}
 		}
-		return result, mapUsage, false
+		// session/follow is a continuous observation stream that doesn't send turn/end.
+		// When we receive assistant/message (the final response), the turn is complete.
+		// deepseek-harness sends assistant/message with usage data when available,
+		// but some responses may not include usage - still consider the turn done.
+		log.Printf("[DSH CLIENT] assistant/message: text=%d chars, hasUsage=%v (input=%d, output=%d)",
+			sb.Len(), d.Usage != nil,
+			func() int { if d.Usage != nil { return d.Usage.InputTokens }; return 0 }(),
+			func() int { if d.Usage != nil { return d.Usage.OutputTokens }; return 0 }())
+		done := true // Always consider turn done after assistant/message
+		return result, mapUsage, done
 
 	case "turn/end":
 		var d struct {
@@ -605,8 +642,33 @@ func (c *DeepSeekClient) RunTurnStream(
 	var accumulated strings.Builder
 	emitted := false
 	msgID := randomOCID()
+	turnDone := false
+	var usage *TurnUsage
 
 	for {
+		// If turn is done, emit span.model_request_end and close
+		if turnDone {
+			time.Sleep(200 * time.Millisecond)
+			log.Printf("[DSH CLIENT] Turn done, emitting span.model_request_end and closing WebSocket")
+
+			// Emit span.model_request_end for usage tracking
+			duration := time.Since(start)
+			if usageEv, err := usageEvent("deepseek-chat", "deepseek", duration, usage); err == nil {
+				if err := onEvent(usageEv); err != nil {
+					return err
+				}
+			}
+
+			_ = conn.Close()
+			logTurn("backend", "deepseek", "session", req.SessionID,
+				"stream", true,
+				"duration_ms", duration.Milliseconds(),
+				"chars", accumulated.Len(),
+				"input_tokens", valueOrZero(usage, func(u *TurnUsage) int { return u.InputTokens }),
+				"output_tokens", valueOrZero(usage, func(u *TurnUsage) int { return u.OutputTokens }))
+			return nil
+		}
+
 		type readResult struct {
 			msgType string
 			data    json.RawMessage
@@ -652,8 +714,13 @@ func (c *DeepSeekClient) RunTurnStream(
 				if parseErr != nil {
 					continue
 				}
-				if err := c.emitSessionEvent(ev, &accumulated, &emitted, msgID, onEvent); err != nil {
-					return err
+				done, emitErr := c.emitSessionEvent(ev, &accumulated, &emitted, msgID, onEvent, &usage)
+				if emitErr != nil {
+					return emitErr
+				}
+				log.Printf("[DSH CLIENT] After emitSessionEvent, ev.Type=%s, done=%v", ev.Type, done)
+				if done {
+					turnDone = true
 				}
 
 			case "end":
@@ -695,13 +762,17 @@ func (c *DeepSeekClient) RunTurnStream(
 }
 
 // emitSessionEvent processes and emits a single session event to the handler.
+// It returns (done, err) where done=true indicates the turn is complete.
+// It also updates the usage pointer if token usage is received.
 func (c *DeepSeekClient) emitSessionEvent(
 	ev *dshSessionEvent,
 	accumulated *strings.Builder,
 	emitted *bool,
 	msgID string,
 	onEvent EventHandler,
-) error {
+	// usage is updated if the assistant/message includes usage data
+	usage **TurnUsage,
+) (done bool, err error) {
 	switch ev.Type {
 	case "assistant/chunk":
 		var d struct {
@@ -712,32 +783,34 @@ func (c *DeepSeekClient) emitSessionEvent(
 		}
 		if json.Unmarshal(ev.Data, &d) != nil ||
 			d.Chunk.Type != "text-delta" || d.Chunk.Text == "" {
-			return nil
+			return false, nil
 		}
 		accumulated.WriteString(d.Chunk.Text)
 		mapped, mapErr := agentMessageEvent(randomOCID(), msgID, accumulated.String())
 		if mapErr != nil {
-			return mapErr
+			return false, mapErr
 		}
 		if err := onEvent(mapped); err != nil {
-			return err
+			return false, err
 		}
 		*emitted = true
+		return false, nil
 
 	case "tool/call":
 		var d struct {
 			Name string `json:"name"`
 		}
 		if json.Unmarshal(ev.Data, &d) != nil {
-			return nil
+			return false, nil
 		}
 		mapped, mapErr := agentToolUseEvent(d.Name, "")
 		if mapErr != nil {
-			return mapErr
+			return false, mapErr
 		}
 		if err := onEvent(mapped); err != nil {
-			return err
+			return false, err
 		}
+		return false, nil
 
 	case "tool/result":
 		var d struct {
@@ -746,7 +819,7 @@ func (c *DeepSeekClient) emitSessionEvent(
 			} `json:"error"`
 		}
 		if json.Unmarshal(ev.Data, &d) != nil {
-			return nil
+			return false, nil
 		}
 		content := "(completed)"
 		if d.Error != nil {
@@ -754,11 +827,12 @@ func (c *DeepSeekClient) emitSessionEvent(
 		}
 		mapped, mapErr := agentToolResultEvent("", content)
 		if mapErr != nil {
-			return mapErr
+			return false, mapErr
 		}
 		if err := onEvent(mapped); err != nil {
-			return err
+			return false, err
 		}
+		return false, nil
 
 	case "assistant/message":
 		var d struct {
@@ -768,9 +842,13 @@ func (c *DeepSeekClient) emitSessionEvent(
 					Text string `json:"text"`
 				} `json:"content"`
 			} `json:"message"`
+			Usage *struct {
+				InputTokens  int `json:"inputTokens"`
+				OutputTokens int `json:"outputTokens"`
+			} `json:"usage"`
 		}
 		if json.Unmarshal(ev.Data, &d) != nil {
-			return nil
+			return false, nil
 		}
 		var sb strings.Builder
 		for _, part := range d.Message.Content {
@@ -781,17 +859,29 @@ func (c *DeepSeekClient) emitSessionEvent(
 		if sb.Len() > 0 {
 			mapped, mapErr := agentMessageEvent(randomOCID(), msgID, sb.String())
 			if mapErr != nil {
-				return mapErr
+				return false, mapErr
 			}
 			if err := onEvent(mapped); err != nil {
-				return err
+				return false, err
 			}
 			*emitted = true
 		}
+		// Capture usage data if present
+		if d.Usage != nil && *usage == nil {
+			*usage = &TurnUsage{
+				InputTokens:  d.Usage.InputTokens,
+				OutputTokens: d.Usage.OutputTokens,
+			}
+			log.Printf("[DSH CLIENT] Captured usage: input=%d, output=%d", d.Usage.InputTokens, d.Usage.OutputTokens)
+		}
+		// assistant/message signals the final response - turn is done
+		log.Printf("[DSH CLIENT] emitSessionEvent: assistant/message received, marking turn done")
+		return true, nil
 
 	case "turn/end":
 		// Turn end is handled by the stream end message
+		return false, nil
 	}
 
-	return nil
+	return false, nil
 }
