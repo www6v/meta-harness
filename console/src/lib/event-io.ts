@@ -113,7 +113,81 @@ export function getEventIO(event: Event, ctx: EventIOContext = {}): EventIO {
   const { pairedUse, pairedResult, modelErrorCause } = ctx;
   const type = event.type;
 
+  // DeepSeek harness event types
   switch (type) {
+    case "user/message":
+      return {
+        type,
+        input: emptyToUndefined(contentText(event.content) || event.content),
+        output: undefined,
+        inputLabel: "Message",
+      };
+
+    case "system/message": {
+      const text = contentText(event.content);
+      return {
+        type,
+        input: undefined,
+        output: emptyToUndefined(text),
+        outputLabel: "System Prompt",
+      };
+    }
+
+    case "assistant/message": {
+      const text = contentText(event.content);
+      return {
+        type,
+        input: undefined,
+        output: emptyToUndefined(text),
+        outputLabel: "Assistant Message",
+      };
+    }
+
+    case "tool/call": {
+      const data = event.data as Record<string, unknown> | undefined;
+      return {
+        type,
+        input: emptyToUndefined({
+          name: event.name ?? data?.name,
+          arguments: data?.arguments,
+          callId: data?.callId,
+        }),
+        output: undefined,
+        inputLabel: "Tool Call",
+      };
+    }
+
+    case "tool/result": {
+      const data = event.data as Record<string, unknown> | undefined;
+      return {
+        type,
+        input: emptyToUndefined(pairedUse ? {
+          name: (pairedUse as { name?: string }).name,
+        } : undefined),
+        output: emptyToUndefined({
+          content: (event as { content?: unknown }).content,
+          error: data?.error,
+        }),
+        unpaired: !pairedUse,
+        inputLabel: "Tool Call",
+        outputLabel: "Tool Result",
+      };
+    }
+
+    case "assistant/attempt": {
+      const data = event.data as Record<string, unknown> | undefined;
+      return {
+        type,
+        input: undefined,
+        output: emptyToUndefined({
+          stream: data?.stream,
+          reason: "No surface message committed",
+        }),
+        outputLabel: "Attempt",
+      };
+    }
+
+    // Standard OMA event types
     case "user.message":
       return {
         type,

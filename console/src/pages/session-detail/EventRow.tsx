@@ -43,17 +43,21 @@ export interface EventRowProps {
 function getEventIcon(type: string) {
   switch (type) {
     case "user.message":
+    case "user/message":
       return UserIcon;
     case "agent.message":
+    case "assistant/message":
       return MessageSquareIcon;
     case "agent.thinking":
       return InfoIcon;
     case "agent.tool_use":
     case "agent.custom_tool_use":
     case "agent.mcp_tool_use":
+    case "tool/call":
       return WrenchIcon;
     case "session.error":
     case "session.warning":
+    case "assistant/attempt":
       return AlertCircleIcon;
     default:
       return BotIcon;
@@ -62,11 +66,43 @@ function getEventIcon(type: string) {
 
 /**
  * Get the category for transcript filtering.
+ *
+ * DeepSeek harness event types mapping:
+ * - Message events (消息事件): user/message, system/message, assistant/message, tool/result
+ * - Tool events (工具事件): tool/call, tool/result
+ * - Auxiliary events (辅助事件): assistant/attempt
  */
-export type TranscriptCategory = "user" | "agent" | "tool" | "error" | "system";
+export type TranscriptCategory = "user" | "agent" | "tool" | "error" | "system" | "message" | "auxiliary";
 
 export function categorizeEvent(event: Event): TranscriptCategory {
-  switch (event.type) {
+  const type = event.type;
+
+  // DeepSeek harness events - Message events (消息事件)
+  if (type === "user/message" || type === "user.message") {
+    return "user";
+  }
+  if (type === "system/message") {
+    return "message";
+  }
+  if (type === "assistant/message") {
+    return "message";
+  }
+
+  // DeepSeek harness events - Tool events (工具事件)
+  if (type === "tool/call") {
+    return "tool";
+  }
+  if (type === "tool/result") {
+    return "tool";
+  }
+
+  // DeepSeek harness events - Auxiliary events (辅助事件)
+  if (type === "assistant/attempt") {
+    return "auxiliary";
+  }
+
+  // Standard OMA events
+  switch (type) {
     case "user.message":
       return "user";
     case "agent.message":
@@ -190,8 +226,59 @@ function extractEventText(e: Event): string {
  * Get a text snippet from an event (first ~50 chars).
  */
 function getEventSnippet(event: Event): string {
-  switch (event.type) {
-    case "user.message":
+  const type = event.type;
+
+  // DeepSeek harness events
+  if (type === "user/message" || type === "user.message") {
+    const text = Array.isArray(event.content)
+      ? event.content[0]?.text ?? ""
+      : typeof event.content === "string"
+        ? event.content
+        : "";
+    return text.slice(0, 50) + (text.length > 50 ? "…" : "");
+  }
+
+  if (type === "assistant/message" || type === "agent.message") {
+    const text = Array.isArray(event.content)
+      ? event.content[0]?.text ?? ""
+      : typeof event.content === "string"
+        ? event.content
+        : "";
+    return text.slice(0, 50) + (text.length > 50 ? "…" : "");
+  }
+
+  if (type === "system/message") {
+    const text = Array.isArray(event.content)
+      ? event.content[0]?.text ?? ""
+      : typeof event.content === "string"
+        ? event.content
+        : "";
+    return `System: ${text.slice(0, 40)}${text.length > 40 ? "…" : ""}`;
+  }
+
+  if (type === "tool/call") {
+    const name = event.name ?? "tool";
+    return `Calling ${name}()`;
+  }
+
+  if (type === "tool/result") {
+    return "Tool result";
+  }
+
+  if (type === "assistant/attempt") {
+    return "Assistant attempt (no surface message)";
+  }
+
+  // Standard OMA events
+  switch (type) {
+    case "user.message": {
+      const text = Array.isArray(event.content)
+        ? event.content[0]?.text ?? ""
+        : typeof event.content === "string"
+          ? event.content
+          : "";
+      return text.slice(0, 50) + (text.length > 50 ? "…" : "");
+    }
     case "agent.message": {
       const text = Array.isArray(event.content)
         ? event.content[0]?.text ?? ""
@@ -228,7 +315,7 @@ function getEventSnippet(event: Event): string {
       return event.message ?? "Warning";
     }
     default: {
-      return event.type;
+      return type;
     }
   }
 }

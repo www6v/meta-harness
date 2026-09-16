@@ -59,6 +59,8 @@ const CATEGORY_LABELS: Record<TranscriptCategory, string> = {
   tool: "Tool",
   error: "Error",
   system: "System",
+  message: "Message",    // DeepSeek: system/message, assistant/message
+  auxiliary: "Auxiliary", // DeepSeek: assistant/attempt
 };
 
 const CATEGORY_COLORS: Record<TranscriptCategory, string> = {
@@ -67,6 +69,8 @@ const CATEGORY_COLORS: Record<TranscriptCategory, string> = {
   tool: "bg-blue-500",
   error: "bg-red-700",
   system: "bg-gray-500",
+  message: "bg-purple-500",    // DeepSeek message events
+  auxiliary: "bg-orange-500",  // DeepSeek auxiliary events
 };
 
 const CATEGORY_BG: Record<TranscriptCategory, string> = {
@@ -75,6 +79,8 @@ const CATEGORY_BG: Record<TranscriptCategory, string> = {
   tool: "bg-blue-50 border-l-4 border-blue-500",
   error: "bg-red-100 border-l-4 border-red-700",
   system: "bg-gray-50 border-l-4 border-gray-500",
+  message: "bg-purple-50 border-l-4 border-purple-500",    // DeepSeek message events
+  auxiliary: "bg-orange-50 border-l-4 border-orange-500",  // DeepSeek auxiliary events
 };
 
 export function TranscriptTab({
@@ -87,7 +93,7 @@ export function TranscriptTab({
   sending = false,
 }: TranscriptTabProps) {
   const [selectedCategories, setSelectedCategories] = useState<Set<TranscriptCategory>>(
-    new Set(["user", "agent", "tool", "error"])
+    new Set(["user", "agent", "tool", "error", "message", "auxiliary"])
   );
   const [viewMode, setViewMode] = useState<DetailViewMode>("rendered");
 
