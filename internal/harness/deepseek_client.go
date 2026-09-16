@@ -350,6 +350,7 @@ func (c *DeepSeekClient) collectTurn(
 			case "item":
 				var item remoteMuxItemMessage
 				if err := json.Unmarshal(r.data, &item); err != nil {
+					log.Printf("[DSH CLIENT] Failed to unmarshal item: %v", err)
 					continue
 				}
 				if item.StreamID != streamID {
@@ -718,7 +719,6 @@ func (c *DeepSeekClient) RunTurnStream(
 				if emitErr != nil {
 					return emitErr
 				}
-				log.Printf("[DSH CLIENT] After emitSessionEvent, ev.Type=%s, done=%v", ev.Type, done)
 				if done {
 					turnDone = true
 				}
@@ -838,8 +838,11 @@ func (c *DeepSeekClient) emitSessionEvent(
 		var d struct {
 			Message struct {
 				Content []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
+					Type      string          `json:"type"`
+					Text      string          `json:"text"`
+					ID        string          `json:"id"`
+					Name      string          `json:"name"`
+					Arguments json.RawMessage `json:"arguments"`
 				} `json:"content"`
 			} `json:"message"`
 			Usage *struct {
@@ -847,17 +850,36 @@ func (c *DeepSeekClient) emitSessionEvent(
 				OutputTokens int `json:"outputTokens"`
 			} `json:"usage"`
 		}
-		if json.Unmarshal(ev.Data, &d) != nil {
+		if err := json.Unmarshal(ev.Data, &d); err != nil {
 			return false, nil
 		}
-		var sb strings.Builder
+
+		// Process each content item - emit tool calls and accumulate text
+		var textContent strings.Builder
+		hasToolCall := false
 		for _, part := range d.Message.Content {
-			if part.Type == "text" {
-				sb.WriteString(part.Text)
+			switch part.Type {
+			case "text":
+				textContent.WriteString(part.Text)
+			case "tool-call":
+				// Emit agent.tool_use event for tool calls
+				hasToolCall = true
+				mapped, mapErr := agentToolUseEvent(part.Name, "")
+				if mapErr != nil {
+					return false, mapErr
+				}
+				if err := onEvent(mapped); err != nil {
+					return false, err
+				}
+				*emitted = true
+			case "reasoning":
+				// Skip reasoning content - it's internal thinking
 			}
 		}
-		if sb.Len() > 0 {
-			mapped, mapErr := agentMessageEvent(randomOCID(), msgID, sb.String())
+
+		// Emit accumulated text as agent.message (final response after tool execution)
+		if textContent.Len() > 0 {
+			mapped, mapErr := agentMessageEvent(randomOCID(), msgID, textContent.String())
 			if mapErr != nil {
 				return false, mapErr
 			}
@@ -866,16 +888,20 @@ func (c *DeepSeekClient) emitSessionEvent(
 			}
 			*emitted = true
 		}
+
 		// Capture usage data if present
 		if d.Usage != nil && *usage == nil {
 			*usage = &TurnUsage{
 				InputTokens:  d.Usage.InputTokens,
 				OutputTokens: d.Usage.OutputTokens,
 			}
-			log.Printf("[DSH CLIENT] Captured usage: input=%d, output=%d", d.Usage.InputTokens, d.Usage.OutputTokens)
 		}
-		// assistant/message signals the final response - turn is done
-		log.Printf("[DSH CLIENT] emitSessionEvent: assistant/message received, marking turn done")
+
+		// Only mark turn done if this is a final text response (no tool calls)
+		// Tool calls mean the model is requesting tool execution, not completing
+		if hasToolCall {
+			return false, nil
+		}
 		return true, nil
 
 	case "turn/end":
