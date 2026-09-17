@@ -8,12 +8,12 @@
 # override a shared ~/.pi/agent auth.json mount for quota isolation.
 
 services:
-  oma-harness-1:
-    environment:
-      OPENAI_API_KEY: ${HARNESS_LITELLM_KEY_1}
-      LITELLM_API_KEY: ${HARNESS_LITELLM_KEY_1}
+  # oma-harness-1:
+  #   environment:
+  #     OPENAI_API_KEY: ${HARNESS_LITELLM_KEY_1}
+  #     LITELLM_API_KEY: ${HARNESS_LITELLM_KEY_1}
 
-  oma-harness-2:
-    environment:
-      OPENAI_API_KEY: ${HARNESS_LITELLM_KEY_2}
-      LITELLM_API_KEY: ${HARNESS_LITELLM_KEY_2}
+  # oma-harness-2:
+  #   environment:
+  #     OPENAI_API_KEY: ${HARNESS_LITELLM_KEY_2}
+  #     LITELLM_API_KEY: ${HARNESS_LITELLM_KEY_2}

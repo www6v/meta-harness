@@ -40,63 +40,63 @@ ensure_data_dir() {
 # Host :8090 is published by oma-harness-lb. After migrating from a single
 # oma-harness service, the old container (e.g. deploy-oma-harness-1) is an
 # orphan and still maps 8090 — remove it before starting the LB.
-free_stale_harness_port() {
-  local port=8090
-  local line name
+# free_stale_harness_port() {
+#   local port=8090
+#   local line name
+#
+#   while IFS= read -r line; do
+#     [[ -z "${line}" ]] && continue
+#     name="$(echo "${line}" | awk '{print $2}')"
+#     # Keep the current LB; drop everything else publishing host :8090.
+#     if [[ "${name}" == *oma-harness-lb* ]]; then
+#       continue
+#     fi
+#     echo "hint: removing stale container holding :${port}: ${name}" >&2
+#     docker rm -f "${name}" >/dev/null
+#   done < <(
+#     docker ps --format '{{.ID}} {{.Names}} {{.Ports}}' 2>/dev/null \
+#       | grep -E "0\.0\.0\.0:${port}->|:::${port}->" || true
+#   )
+# }
 
-  while IFS= read -r line; do
-    [[ -z "${line}" ]] && continue
-    name="$(echo "${line}" | awk '{print $2}')"
-    # Keep the current LB; drop everything else publishing host :8090.
-    if [[ "${name}" == *oma-harness-lb* ]]; then
-      continue
-    fi
-    echo "hint: removing stale container holding :${port}: ${name}" >&2
-    docker rm -f "${name}" >/dev/null
-  done < <(
-    docker ps --format '{{.ID}} {{.Names}} {{.Ports}}' 2>/dev/null \
-      | grep -E "0\.0\.0\.0:${port}->|:::${port}->" || true
-  )
-}
+# check_harness_port() {
+#   local port=8090
+#   local holders=""
+#
+#   holders="$(
+#     docker ps --format '{{.ID}}\t{{.Names}}\t{{.Ports}}' 2>/dev/null \
+#       | grep -E "0\.0\.0\.0:${port}->|:::${port}->" || true
+#   )"
+#
+#   if [[ -n "${holders}" ]]; then
+#     if echo "${holders}" | grep -q 'oma-harness-lb'; then
+#       return 0
+#     fi
+#     echo "error: host port ${port} is already allocated — oma-harness-lb cannot bind." >&2
+#     echo "holders:" >&2
+#     echo "${holders}" | sed 's/^/  /' >&2
+#     echo >&2
+#     echo "fix:" >&2
+#     echo "  docker ps -a --format '{{.Names}}\t{{.Ports}}' | grep ${port}" >&2
+#     echo "  docker rm -f <container>" >&2
+#     echo "  $(basename "$0") up" >&2
+#     return 1
+#   fi
 
-check_harness_port() {
-  local port=8090
-  local holders=""
-
-  holders="$(
-    docker ps --format '{{.ID}}\t{{.Names}}\t{{.Ports}}' 2>/dev/null \
-      | grep -E "0\.0\.0\.0:${port}->|:::${port}->" || true
-  )"
-
-  if [[ -n "${holders}" ]]; then
-    if echo "${holders}" | grep -q 'oma-harness-lb'; then
-      return 0
-    fi
-    echo "error: host port ${port} is already allocated — oma-harness-lb cannot bind." >&2
-    echo "holders:" >&2
-    echo "${holders}" | sed 's/^/  /' >&2
-    echo >&2
-    echo "fix:" >&2
-    echo "  docker ps -a --format '{{.Names}}\t{{.Ports}}' | grep ${port}" >&2
-    echo "  docker rm -f <container>" >&2
-    echo "  $(basename "$0") up" >&2
-    return 1
-  fi
-
-  if command -v ss >/dev/null 2>&1; then
-    if ss -ltn "( sport = :${port} )" 2>/dev/null | grep -q ":${port}"; then
-      echo "error: host port ${port} is in use by a non-docker process." >&2
-      echo "  ss -ltnp 'sport = :${port}'" >&2
-      return 1
-    fi
-  elif command -v lsof >/dev/null 2>&1; then
-    if lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1; then
-      echo "error: host port ${port} is in use by a non-docker process." >&2
-      lsof -nP -iTCP:"${port}" -sTCP:LISTEN >&2 || true
-      return 1
-    fi
-  fi
-}
+#   if command -v ss >/dev/null 2>&1; then
+#     if ss -ltn "( sport = :${port} )" 2>/dev/null | grep -q ":${port}"; then
+#       echo "error: host port ${port} is in use by a non-docker process." >&2
+#       echo "  ss -ltnp 'sport = :${port}'" >&2
+#       return 1
+#     fi
+#   elif command -v lsof >/dev/null 2>&1; then
+#     if lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1; then
+#       echo "error: host port ${port} is in use by a non-docker process." >&2
+#       lsof -nP -iTCP:"${port}" -sTCP:LISTEN >&2 || true
+#       return 1
+#     fi
+#   fi
+# }
 
 # Check whether Docker Hub mirrors are configured (info only, no warning).
 check_mirror() {
@@ -199,7 +199,7 @@ Commands:
   build         Build images without starting
   pull          Pull base images (useful for warming up cache before build)
   restart       Restart all services
-  logs          Tail logs (optional service: meta-harness | oma-auth | oma-harness-lb)
+  logs          Tail logs (optional service: meta-harness | oma-auth)
   ps            Show container status
   preflight     Run pre-flight checks without starting anything
   setup-mirror  Configure Docker daemon to use a domestic registry mirror
@@ -226,7 +226,7 @@ Examples:
 Environment:
   Loads ${ROOT_DIR}/.env when present (via --env-file and service env_file).
   Platform API: http://localhost:8787
-  Harness LB:   http://localhost:8090  (oma-harness-lb → harness-1/2)
+  # Harness LB:   http://localhost:8090  (oma-harness-lb → harness-1/2)
   OpenViking:   http://localhost:1933  (oma-openviking, managed by start-openviking.sh)
   DeepSeek:     http://localhost:3080  (oma-deepseek, managed by start-deepseek.sh)
 EOF
@@ -234,7 +234,7 @@ EOF
 
 print_endpoints() {
   echo "meta-harness: http://localhost:8787  (Console UI + /health)"
-  echo "oma-harness:  http://localhost:8090  (LB → oma-harness-1/2)"
+  # echo "oma-harness:  http://localhost:8090  (LB → oma-harness-1/2)"
   echo "oma-openviking: http://localhost:1933  (use openviking/start-openviking.sh to start)"
   echo "oma-deepseek:   http://localhost:3080  (use deepseek/start-deepseek.sh to start)"
 }
@@ -253,8 +253,8 @@ case "${cmd}" in
     ensure_data_dir
     preflight
     check_mirror
-    free_stale_harness_port
-    check_harness_port
+    # free_stale_harness_port
+    # check_harness_port
 
     build_args=()
     if [[ "${1:-}" == "--no-build" ]]; then
@@ -270,8 +270,8 @@ case "${cmd}" in
     ensure_data_dir
     preflight
     check_mirror
-    free_stale_harness_port
-    check_harness_port
+    # free_stale_harness_port
+    # check_harness_port
     compose up --build "$@"
     ;;
   down)
@@ -291,7 +291,7 @@ case "${cmd}" in
   restart)
     ensure_data_dir
     preflight
-    check_harness_port
+    # check_harness_port
     compose restart "$@"
     print_endpoints
     ;;
@@ -304,7 +304,7 @@ case "${cmd}" in
   preflight)
     preflight
     check_mirror
-    check_harness_port 2>/dev/null || true
+    # check_harness_port 2>/dev/null || true
     ;;
   setup-mirror)
     cmd_setup_mirror "$@"
