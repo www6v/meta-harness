@@ -65,6 +65,8 @@ func main() {
 	}
 	workdirBase = absWorkdir
 	harnessURL := envOrDefault("HARNESS_URL", "http://127.0.0.1:8090")
+	// For DeepSeek harness DSH proxy, use OMA_DEEPSEEK_GATEWAY_URL (default 3080)
+	deepSeekHarnessURL := envOrDefault("OMA_DEEPSEEK_GATEWAY_URL", "http://127.0.0.1:3080")
 	apiKey := os.Getenv("OMA_API_KEY")
 	consoleDir := os.Getenv("CONSOLE_DIR")
 	authDisabled := os.Getenv("AUTH_DISABLED") == "1"
@@ -255,6 +257,10 @@ func main() {
 		harnessPlatformBase, internalSecret,
 		outbound.HostForHarness(outboundAddr), apiKey,
 		dbPath,
+		&harness.DeepSeekClient{
+			GatewayURL: deepSeekHarnessURL,
+			Token:      os.Getenv("OMA_DEEPSEEK_TOKEN"),
+		},
 	)
 	// Enable per-environment sandbox resolution. Sessions bound to an
 	// Environment whose config declares a sandbox provider will now use
@@ -398,7 +404,7 @@ func main() {
 		OutboundProxyAddr: outboundAddr,
 		OutboundProxyKey:  apiKey,
 		InternalSecret:    internalSecret,
-		HarnessURL:        harnessURL,
+		HarnessURL:        deepSeekHarnessURL,
 		ModelResolver:     modelResolver,
 		LinearGateway:     linearGateway,
 		GitHubGateway:     githubGateway,

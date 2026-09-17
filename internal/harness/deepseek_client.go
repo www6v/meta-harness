@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -158,16 +159,78 @@ func (c *DeepSeekClient) ensureSession(
 	if cwd == "" {
 		cwd = "."
 	}
+	// Create a unique cwd per session for isolation
+	// This ensures each oma-session has its own DSH file namespace
+	sessionCwd := filepath.Join(cwd, "dsh-sessions", sessionID)
+	if err := os.MkdirAll(sessionCwd, 0o755); err != nil {
+		// If we can't create the session dir, fall back to base cwd
+		sessionCwd = cwd
+	}
 	err := c.rpc(ctx, "session.create", map[string]any{
 		"request": map[string]any{
 			"sessionId": sessionID,
-			"cwd":       cwd,
+			"cwd":       sessionCwd,
 		},
 	}, nil)
 	if err != nil && strings.Contains(err.Error(), "session-conflict") {
 		return nil
 	}
 	return err
+}
+
+// CreateSession creates a new deepseek-harness session and returns the DSH session UUID.
+// The sessionID is the oma-session identifier used as the cwd-based session name.
+// Returns the DSH session UUID which should be stored in the oma-session's dsh_session_id field.
+func (c *DeepSeekClient) CreateSession(
+	ctx context.Context, sessionID string,
+) (string, error) {
+	// Each DSH session needs a unique cwd for file isolation.
+	// We use a session-specific subdirectory to ensure isolation.
+	// DSH will create the session under ~/.dsh/sessions/{sessionId}/
+	// The workspaceFileScopeId for RPC calls should be this sessionId.
+
+	cwd, _ := os.Getwd()
+	if cwd == "" {
+		cwd = "."
+	}
+	// Create a unique cwd per session for isolation
+	// This ensures each oma-session has its own DSH file namespace
+	sessionCwd := filepath.Join(cwd, "dsh-sessions", sessionID)
+	if err := os.MkdirAll(sessionCwd, 0o755); err != nil {
+		// If we can't create the session dir, fall back to base cwd
+		sessionCwd = cwd
+	}
+
+	// Create the session - if it already exists, that's fine
+	var result map[string]any
+	err := c.rpc(ctx, "session.create", map[string]any{
+		"request": map[string]any{
+			"sessionId": sessionID,
+			"cwd":       sessionCwd,
+		},
+	}, &result)
+	if err != nil && strings.Contains(err.Error(), "session-conflict") {
+		// Session already exists, return the sessionID as the scope ID
+		return sessionID, nil
+	}
+	if err != nil {
+		return "", err
+	}
+
+	// Return the oma-session ID as the workspaceFileScopeId
+	// DSH uses this to isolate the session's workspace files
+	return sessionID, nil
+}
+
+// DeleteSession deletes a deepseek-harness session.
+func (c *DeepSeekClient) DeleteSession(
+	ctx context.Context, sessionID string,
+) error {
+	// DSH doesn't have a direct session.delete RPC.
+	// The session will be cleaned up by DSH's garbage collection.
+	// For now, we just ensure the session is not in use.
+	_ = sessionID
+	return nil
 }
 
 // RunTurn implements Client. It creates the dsh session, prompts, and

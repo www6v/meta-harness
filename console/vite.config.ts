@@ -3,7 +3,9 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 
-const API_TARGET = process.env.VITE_API_TARGET || "http://localhost:8090";
+// API_TARGET points to oma-server (port 8787), which has a DSH proxy that
+// forwards /api/* requests to deepseek-harness (port 3080) with auth cookies.
+const API_TARGET = process.env.VITE_API_TARGET || "http://localhost:8787";
 const AUTH_TARGET = process.env.VITE_AUTH_TARGET || "http://localhost:8788";
 // OMA platform serves /v1/* resources (agents, sessions, environments, etc.)
 const OMA_PLATFORM_TARGET = process.env.VITE_OMA_PLATFORM_TARGET || "http://localhost:8787";

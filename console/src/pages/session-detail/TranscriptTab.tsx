@@ -13,7 +13,7 @@
  * - System: gray
  */
 
-import { Link2Icon } from "lucide-react";
+import { DownloadIcon, Link2Icon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import type { Event } from "../../lib/events";
@@ -21,10 +21,15 @@ import { pairSessionErrors, pairToolResults } from "../../lib/tool-pairing";
 import { cn } from "../../lib/utils";
 import {
   PromptInput,
+  PromptInputActionMenu,
+  PromptInputActionMenuContent,
+  PromptInputActionMenuTrigger,
+  PromptInputActionMenuItem,
   PromptInputTextarea,
   PromptInputFooter,
   PromptInputSubmit,
 } from "../../components/ai-elements/prompt-input";
+import { Button } from "@/components/ui/button";
 import { EventDetail } from "./EventDetail";
 import {
   EventDetailPane,
@@ -45,8 +50,10 @@ export interface TranscriptTabProps {
   selectedEventId: string | null;
   onSelectEvent: (eventId: string | null) => void;
   onViewInDebug?: (eventId: string) => void;
-  onSend?: (text: string) => void;
+  onSend?: (text: string, files?: File[]) => void;
   sending?: boolean;
+  sessionId?: string;
+  onShowFiles?: () => void;
   /** Streaming overlays — rendered only in Transcript tab */
   streams?: Map<string, Event>;
   thinkingStreams?: Map<string, Event>;
@@ -91,6 +98,8 @@ export function TranscriptTab({
   onViewInDebug,
   onSend,
   sending = false,
+  sessionId,
+  onShowFiles,
 }: TranscriptTabProps) {
   const [selectedCategories, setSelectedCategories] = useState<Set<TranscriptCategory>>(
     new Set(["user", "agent", "tool", "error", "message", "auxiliary"])
@@ -225,11 +234,28 @@ export function TranscriptTab({
           <div className="border-t border-border bg-bg p-2">
             <PromptInput
               accept=""
-              maxFiles={0}
-              maxFileSize={0}
+              maxFiles={5}
+              maxFileSize={10 * 1024 * 1024}
               onError={(err) => toast.error(err.message)}
-              onSubmit={({ text }) => {
-                if (text.trim()) onSend(text);
+              onSubmit={({ text, files }) => {
+                const fileList = files?.map((f) => {
+                  // Convert FileUIPart back to File for the send function
+                  if (f.url && f.url.startsWith("blob:")) {
+                    // For blob URLs, we need to fetch and convert
+                    return fetch(f.url).then(r => r.blob()).then(b => new File([b], f.filename || "file", { type: f.mediaType }));
+                  }
+                  // For data URLs or other cases, create from data
+                  return fetch(f.url || "").then(r => r.blob()).then(b => new File([b], f.filename || "file", { type: f.mediaType }));
+                });
+                if (fileList) {
+                  Promise.all(fileList).then(fileArray => {
+                    onSend(text, fileArray);
+                  }).catch(() => {
+                    onSend(text);
+                  });
+                } else {
+                  onSend(text);
+                }
               }}
             >
               <PromptInputTextarea
@@ -237,7 +263,22 @@ export function TranscriptTab({
                 disabled={sending}
               />
               <PromptInputFooter>
-                <PromptInputSubmit disabled={sending} />
+                <div className="flex items-center gap-2">
+                  {/* Session output files button */}
+                  {sessionId && onShowFiles && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={onShowFiles}
+                      title="View and download session output files"
+                      className="text-xs"
+                    >
+                      <DownloadIcon className="h-4 w-4 mr-1" />
+                      Output Files
+                    </Button>
+                  )}
+                  <PromptInputSubmit disabled={sending} />
+                </div>
               </PromptInputFooter>
             </PromptInput>
           </div>

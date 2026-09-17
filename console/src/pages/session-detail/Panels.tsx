@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 
 import { useApi } from "../../lib/api";
+import { DeepSeekRpcClient } from "../../lib/deepseek-rpc-client";
 
 /**
  * Right-rail panels mounted from `SessionDetail`. Kept here so the main
@@ -128,18 +129,39 @@ export function FilesPanel({
   const { api } = useApi();
   const [files, setFiles] = useState<SessionOutputFile[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState<string | null>(null);
+
+  // Use deepseek-harness RPC client for session outputs
+  const rpcClient = useState(() => new DeepSeekRpcClient(window.location.origin))[0];
 
   useEffect(() => {
     setFiles(null);
     setErr(null);
-    api<{ data: SessionOutputFile[]; has_more: boolean }>(
-      `/v1/sessions/${sessionId}/outputs`,
-    )
-      .then((d) => setFiles(d.data ?? []))
+    // Use RPC client to list session output files
+    rpcClient.listSessionOutputs(sessionId)
+      .then((d) => setFiles(d))
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
-    // api closure changes every render; sessionId is the only stable input
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [sessionId, rpcClient]);
+
+  const handleDownload = async (filename: string) => {
+    setDownloading(filename);
+    try {
+      const result = await rpcClient.readSessionOutputFileBytes(sessionId, filename);
+      // Create blob and download
+      const blob = new Blob([result.bytes], { type: result.mediaType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("download failed", filename, e);
+    }
+    setDownloading(null);
+  };
 
   return (
     <aside className="w-[420px] shrink-0 bg-bg-surface/30 flex flex-col min-h-0">
@@ -178,14 +200,14 @@ export function FilesPanel({
                 className="flex items-center gap-3 py-2"
               >
                 <div className="min-w-0 flex-1">
-                  <a
-                    href={`/v1/sessions/${sessionId}/outputs/${encodeURIComponent(f.filename)}`}
-                    download={f.filename}
-                    className="font-mono text-fg hover:text-info truncate block"
+                  <button
+                    onClick={() => handleDownload(f.filename)}
+                    disabled={downloading === f.filename}
+                    className="font-mono text-fg hover:text-info truncate block text-left w-full disabled:opacity-50 disabled:cursor-not-allowed"
                     title={f.filename}
                   >
-                    {f.filename}
-                  </a>
+                    {downloading === f.filename ? "Downloading…" : f.filename}
+                  </button>
                   <div className="text-[10px] text-fg-subtle mt-0.5">
                     {formatBytes(f.size_bytes)} · {f.media_type} · {new Date(f.uploaded_at).toLocaleString()}
                   </div>

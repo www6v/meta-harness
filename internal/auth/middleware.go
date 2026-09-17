@@ -178,6 +178,10 @@ func isExempt(path string, consoleMounted bool) bool {
 	if strings.HasPrefix(path, "/v1/mcp-proxy/") {
 		return true
 	}
+	// Exempt /api/* paths for DeepSeek Harness RPC proxy
+	if strings.HasPrefix(path, "/api/") {
+		return true
+	}
 	if strings.HasPrefix(path, "/v1/internal/") {
 		return true
 	}

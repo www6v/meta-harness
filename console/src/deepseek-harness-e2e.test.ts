@@ -19,7 +19,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import type { AgentConfig, SessionMeta, SessionEvent } from "@meta-harness/api-types";
 
 // Disable MSW for this E2E test - we need real network requests
-vi.mock("../mocks/server", () => ({
+vi.mock("./mocks/server", () => ({
   server: {
     listen: vi.fn(),
     resetHandlers: vi.fn(),

@@ -66,6 +66,7 @@ import {
   usePromptInputAttachments,
 } from "../components/ai-elements/prompt-input";
 import { CodeBlock } from "../components/ai-elements/code-block";
+import { DeepSeekRpcClient } from "../lib/deepseek-rpc-client";
 
 type View = "transcript" | "debug" | "timeline" | "team" | "chat";
 
@@ -856,6 +857,9 @@ export function SessionDetail() {
       reader.readAsDataURL(file);
     });
 
+  // RPC client for deepseek-harness file operations
+  const rpcClient = useMemo(() => new DeepSeekRpcClient(window.location.origin), []);
+
   const send = async (overrideText?: string, files?: File[]) => {
     const text = (overrideText ?? input).trim();
     if (!text && !files?.length) return;
@@ -864,25 +868,22 @@ export function SessionDetail() {
     setLocalPending(text || (files?.length ? (files.length === 1 ? "🖼️ Image" : `🖼️ ${files.length} images`) : ""));
     setSending(true);
     try {
-      // Upload attachments first so the user.message can reference them
-      // by file_id. Each file is scoped to this session via scope_id so
+      // Upload attachments first using deepseek-harness RPC API.
+      // Each file is scoped to this session via sessionId so
       // it appears in the session's Files panel + the agent's mount.
-      // We mark them downloadable so the operator can re-download from
-      // the panel. Per-file failures don't block the others — the text
+      // Per-file failures don't block the others — the text
       // still goes out and the user can retry the failed upload.
       const uploaded: Array<{ id: string; filename: string; media_type: string }> = [];
       if (files?.length) {
         for (const file of files) {
           try {
-            const fd = new FormData();
-            fd.append("file", file);
-            fd.append("scope_id", id);
-            fd.append("downloadable", "true");
-            const r = await api<{ id: string; filename: string; media_type: string }>(
-              `/v1/files`,
-              { method: "POST", body: fd },
-            );
-            uploaded.push({ id: r.id, filename: r.filename, media_type: r.media_type });
+            // Use binary upload for efficiency (avoids base64 overhead)
+            const result = await rpcClient.uploadFileBinary(file, id, file.name);
+            uploaded.push({
+              id: result.file.attachmentId,
+              filename: result.file.name,
+              media_type: file.type || "application/octet-stream",
+            });
           } catch (e) {
             console.error("file upload failed", file.name, e);
           }
@@ -1249,8 +1250,10 @@ export function SessionDetail() {
             setView("debug");
             viewMode.scrollToDebugEvent(eventId);
           }}
-          onSend={(text) => void send(text)}
+          onSend={(text, files) => void send(text, files)}
           sending={sending}
+          sessionId={id}
+          onShowFiles={() => setShowFiles(true)}
         />
       ) : view === "debug" ? (
         <DebugTab

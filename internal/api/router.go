@@ -318,6 +318,14 @@ func NewRouter(deps Deps) http.Handler {
 
 	mountWorkflowsProxyRoutes(r, deps.HarnessURL)
 
+	// DeepSeek Harness API proxy - forwards /api/* requests (that aren't
+	// handled by more specific routes like /api/workflows/*) to the
+	// deepseek-harness gateway. The console frontend uses these endpoints
+	// for file operations (upload, list session outputs, etc.).
+	mountDshProxyRoutes(r, dshProxyDeps{
+		HarnessURL: deps.HarnessURL,
+	})
+
 	if deps.ConsoleDir != "" {
 		static := console.NewStaticHandler(deps.ConsoleDir)
 		r.NotFound(static.ServeHTTP)
@@ -359,6 +367,7 @@ func NewSessionHandlers(
 	outboundProxyAddr string,
 	outboundProxyKey string,
 	databasePath string,
+	deepSeekClient *harness.DeepSeekClient,
 ) *sessionHandlers {
 	return &sessionHandlers{
 		sessions:          sessions,
@@ -385,5 +394,6 @@ func NewSessionHandlers(
 		outboundProxyAddr: outboundProxyAddr,
 		outboundProxyKey:  outboundProxyKey,
 		databasePath:      databasePath,
+		deepSeekClient:    deepSeekClient,
 	}
 }

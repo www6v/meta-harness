@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -72,6 +73,8 @@ type sessionHandlers struct {
 	// back to the legacy global sandbox cfg.
 	environments    *store.EnvironmentRepo
 	sandboxResolver *sandbox.Resolver
+	// deepSeekClient for creating DSH sessions
+	deepSeekClient *harness.DeepSeekClient
 }
 
 // SetSandboxEnvironmentSupport wires per-environment sandbox resolution
@@ -175,6 +178,29 @@ func mountSessionRoutes(
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+
+		// Create corresponding deepseek-harness session for file isolation
+		if h.deepSeekClient != nil {
+			log.Printf("[SESSION CREATE] Creating DSH session for oma-session %s", sess.ID)
+			dshSessionID, err := h.deepSeekClient.CreateSession(req.Context(), sess.ID)
+			if err != nil {
+				log.Printf("[SESSION CREATE] warning: failed to create DSH session: %v", err)
+				// Non-fatal: continue without DSH session (lazy creation on first file access)
+			} else {
+				log.Printf("[SESSION CREATE] DSH session created successfully: %s", dshSessionID)
+				err = h.sessions.SetDshSessionID(req.Context(), tenantID(req), sess.ID, dshSessionID)
+				if err != nil {
+					log.Printf("[SESSION CREATE] warning: failed to store DSH session ID: %v", err)
+				} else {
+					log.Printf("[SESSION CREATE] DSH session ID stored in database")
+					// Update the session object so the API response includes dsh_session_id
+					sess.DshSessionID = &dshSessionID
+				}
+			}
+		} else {
+			log.Printf("[SESSION CREATE] deepSeekClient is nil - skipping DSH session creation")
+		}
+
 		h.registerMachine(sess)
 		writeJSON(w, http.StatusCreated, formatAPISession(sess))
 	})
@@ -386,6 +412,15 @@ func mountSessionRoutes(
 			}
 			_ = h.workdirs.Remove(req.Context(), id)
 		}
+
+		// Delete corresponding deepseek-harness session for cleanup
+		if h.deepSeekClient != nil && sess.DshSessionID != nil {
+			if err := h.deepSeekClient.DeleteSession(req.Context(), *sess.DshSessionID); err != nil {
+				log.Printf("[SESSION DELETE] warning: failed to delete DSH session %s: %v", *sess.DshSessionID, err)
+				// Non-fatal: continue with oma-session deletion
+			}
+		}
+
 		if err := h.sessions.Delete(req.Context(), tenantID(req), id); err != nil {
 			if err == store.ErrNotFound {
 				writeError(w, http.StatusNotFound, "not found")

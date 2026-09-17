@@ -37,6 +37,7 @@ type Session struct {
 	CreatedAt           int64
 	UpdatedAt           *int64
 	ArchivedAt          *int64
+	DshSessionID        *string  // deepseek-harness session UUID (nullable for lazy creation)
 }
 
 // CreateSessionInput holds fields for session creation.
@@ -116,8 +117,8 @@ func (r *SessionRepo) Create(
 		INSERT INTO sessions (
 			id, tenant_id, agent_id, agent_version, agent_snapshot,
 			environment_id, environment_snapshot, resources, vault_ids,
-			title, status, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			title, status, created_at, updated_at, dsh_session_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
 		id, tenantID, agent.ID, agent.Version, string(snapshot),
 		envID, string(envSnap), "[]", vaultIDsJSON,
 		title, string(SessionStatusIdle), now, now,
@@ -133,7 +134,7 @@ func (r *SessionRepo) GetByID(ctx context.Context, id string) (*Session, error) 
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, agent_id, agent_version, agent_snapshot,
 			environment_id, environment_snapshot, resources, vault_ids,
-			title, metadata, status, turn_id, created_at, updated_at, archived_at
+			title, metadata, status, turn_id, created_at, updated_at, archived_at, dsh_session_id
 		FROM sessions
 		WHERE id = ?`,
 		id,
@@ -274,6 +275,45 @@ func (r *SessionRepo) SetResources(
 	return r.Get(ctx, tenantID, sessionID)
 }
 
+// SetDshSessionID stores the deepseek-harness session UUID for a session.
+func (r *SessionRepo) SetDshSessionID(
+	ctx context.Context,
+	tenantID, sessionID, dshSessionID string,
+) error {
+	now := time.Now().UnixMilli()
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE sessions
+		SET dsh_session_id = ?, updated_at = ?
+		WHERE id = ? AND tenant_id = ?`,
+		dshSessionID, now, sessionID, tenantOrDefault(tenantID),
+	)
+	if err != nil {
+		return fmt.Errorf("set dsh session id: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteDshSessionID clears the deepseek-harness session UUID for a session.
+func (r *SessionRepo) DeleteDshSessionID(
+	ctx context.Context,
+	tenantID, sessionID string,
+) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE sessions
+		SET dsh_session_id = NULL
+		WHERE id = ? AND tenant_id = ?`,
+		sessionID, tenantOrDefault(tenantID),
+	)
+	if err != nil {
+		return fmt.Errorf("delete dsh session id: %w", err)
+	}
+	return nil
+}
+
 // UpdateAgentSnapshot replaces the frozen agent snapshot on a session row.
 func (r *SessionRepo) UpdateAgentSnapshot(
 	ctx context.Context,
@@ -305,7 +345,7 @@ func (r *SessionRepo) Get(
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, agent_id, agent_version, agent_snapshot,
 			environment_id, environment_snapshot, resources, vault_ids,
-			title, metadata, status, turn_id, created_at, updated_at, archived_at
+			title, metadata, status, turn_id, created_at, updated_at, archived_at, dsh_session_id
 		FROM sessions
 		WHERE id = ? AND tenant_id = ?`,
 		id, tenantOrDefault(tenantID),
@@ -321,7 +361,7 @@ func (r *SessionRepo) List(
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, tenant_id, agent_id, agent_version, agent_snapshot,
 			environment_id, environment_snapshot, resources, vault_ids,
-			title, metadata, status, turn_id, created_at, updated_at, archived_at
+			title, metadata, status, turn_id, created_at, updated_at, archived_at, dsh_session_id
 		FROM sessions
 		WHERE tenant_id = ?
 		ORDER BY created_at ASC`,
@@ -452,11 +492,12 @@ func scanSession(row interface {
 		turnID       sql.NullString
 		updatedAt    sql.NullInt64
 		archivedAt   sql.NullInt64
+		dshSessionID sql.NullString
 	)
 	if err := row.Scan(
 		&s.ID, &s.TenantID, &s.AgentID, &s.AgentVersion, &snapshot,
 		&s.EnvironmentID, &envSnapshot, &resources, &vaultIDs,
-		&s.Title, &metadata, &s.Status, &turnID, &s.CreatedAt, &updatedAt, &archivedAt,
+		&s.Title, &metadata, &s.Status, &turnID, &s.CreatedAt, &updatedAt, &archivedAt, &dshSessionID,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -485,6 +526,9 @@ func scanSession(row interface {
 	if archivedAt.Valid {
 		v := archivedAt.Int64
 		s.ArchivedAt = &v
+	}
+	if dshSessionID.Valid && dshSessionID.String != "" {
+		s.DshSessionID = &dshSessionID.String
 	}
 	return &s, nil
 }

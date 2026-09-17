@@ -15,10 +15,14 @@ import (
 )
 
 // dshAuthCookie holds the constructed authentication cookie for dsh web API.
+// Exported as DshAuthCookie for use in other packages.
 type dshAuthCookie struct {
 	Name  string
 	Value string
 }
+
+// DshAuthCookie is the exported type for authentication cookie.
+type DshAuthCookie = dshAuthCookie
 
 // dshCookiePayload is the payload encoded in the authentication cookie
 type dshCookiePayload struct {

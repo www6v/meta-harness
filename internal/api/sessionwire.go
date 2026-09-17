@@ -113,6 +113,9 @@ func formatAPISession(s *store.Session) map[string]any {
 		"usage":           map[string]any{},
 		"stats":           map[string]any{},
 	}
+	if s.DshSessionID != nil {
+		out["dsh_session_id"] = *s.DshSessionID
+	}
 	if s.UpdatedAt != nil {
 		out["updated_at"] = formatISO(*s.UpdatedAt)
 	}

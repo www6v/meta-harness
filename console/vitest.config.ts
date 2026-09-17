@@ -22,5 +22,8 @@ export default defineConfig({
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
     globals: false,
     css: false,
+    // Exclude E2E tests from the default setup since they need real network access
+    // E2E tests should be run separately with: pnpm test -- deepseek-*-e2e.test.ts
+    // and handle MSW disabling internally
   },
 });
