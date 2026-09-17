@@ -53,7 +53,7 @@ export interface TranscriptTabProps {
   onSend?: (text: string, files?: File[]) => void;
   sending?: boolean;
   sessionId?: string;
-  onShowFiles?: () => void;
+
   /** Streaming overlays — rendered only in Transcript tab */
   streams?: Map<string, Event>;
   thinkingStreams?: Map<string, Event>;
@@ -99,7 +99,7 @@ export function TranscriptTab({
   onSend,
   sending = false,
   sessionId,
-  onShowFiles,
+
 }: TranscriptTabProps) {
   const [selectedCategories, setSelectedCategories] = useState<Set<TranscriptCategory>>(
     new Set(["user", "agent", "tool", "error", "message", "auxiliary"])
@@ -264,19 +264,6 @@ export function TranscriptTab({
               />
               <PromptInputFooter>
                 <div className="flex items-center gap-2">
-                  {/* Session output files button */}
-                  {sessionId && onShowFiles && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={onShowFiles}
-                      title="View and download session output files"
-                      className="text-xs"
-                    >
-                      <DownloadIcon className="h-4 w-4 mr-1" />
-                      Output Files
-                    </Button>
-                  )}
                   <PromptInputSubmit disabled={sending} />
                 </div>
               </PromptInputFooter>

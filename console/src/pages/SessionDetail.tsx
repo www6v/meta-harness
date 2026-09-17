@@ -1253,7 +1253,6 @@ export function SessionDetail() {
           onSend={(text, files) => void send(text, files)}
           sending={sending}
           sessionId={id}
-          onShowFiles={() => setShowFiles(true)}
         />
       ) : view === "debug" ? (
         <DebugTab
