@@ -21,6 +21,33 @@ function normalizeOrigin(raw) {
   return s.replace(/\/+$/, "");
 }
 
+// Return the www ↔ non-www counterpart of an origin so that both variants
+// are trusted.  E.g. http://www.example.com:8787 → http://example.com:8787
+// and vice versa.  Returns "" when there is no counterpart (IPv4, localhost,
+// or a hostname that doesn't start/not-start with "www.").
+function counterpartOrigin(origin) {
+  const s = normalizeOrigin(origin);
+  if (!s) return "";
+  try {
+    const u = new URL(s);
+    if (u.hostname.startsWith("www.")) {
+      u.hostname = u.hostname.slice(4);
+      return u.toString().replace(/\/+$/, "");
+    }
+    // Don't flip bare hostnames that look like IPs or "localhost".
+    if (
+      /^\d+\.\d+\.\d+\.\d+$/.test(u.hostname) ||
+      u.hostname === "localhost"
+    ) {
+      return "";
+    }
+    u.hostname = "www." + u.hostname;
+    return u.toString().replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+}
+
 const baseURL = normalizeOrigin(
   process.env.PUBLIC_BASE_URL ?? "http://127.0.0.1:8787",
 );
@@ -35,6 +62,9 @@ const trustedOrigins = Array.from(
       baseURL,
       "http://127.0.0.1:8787",
       "http://localhost:8787",
+      // Auto-trust the www / non-www counterpart of baseURL so that both
+      // http://example.com:8787 and http://www.example.com:8787 work.
+      counterpartOrigin(baseURL),
       ...(process.env.TRUSTED_ORIGINS
         ? process.env.TRUSTED_ORIGINS.split(",").map((s) =>
             normalizeOrigin(s),
