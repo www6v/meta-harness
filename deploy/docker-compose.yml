@@ -161,5 +161,4 @@ services:
 
 networks:
   default:
-    name: deepseek-harness-network
-    external: true
+    name: meta-harness-network
