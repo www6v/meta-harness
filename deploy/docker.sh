@@ -30,7 +30,7 @@ compose() {
   if [[ -f "${ROOT_DIR}/.env" ]]; then
     env_args=(--env-file "${ROOT_DIR}/.env")
   fi
-  docker compose -f "${COMPOSE_FILE}" "${env_args[@]}" "$@"
+  docker compose --project-name meta-harness -f "${COMPOSE_FILE}" "${env_args[@]}" "$@"
 }
 
 ensure_data_dir() {
