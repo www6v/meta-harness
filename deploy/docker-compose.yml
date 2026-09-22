@@ -117,6 +117,9 @@ services:
       #   condition: service_healthy
       # oma-harness-2:
       #   condition: service_healthy
+    networks:
+      - default
+      - deepseek-harness-network
 
 
   # Same-host piPy replicas behind oma-harness-lb. Multi-replica requires
@@ -162,3 +165,5 @@ services:
 networks:
   default:
     name: meta-harness-network
+  deepseek-harness-network:
+    external: true
