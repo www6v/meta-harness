@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploy meta-harness + oma-harness with Docker Compose.
-# Independent services (oma-openviking / oma-deepseek) are managed by their
-# own scripts: start-openviking.sh / start-deepseek.sh.
+# Independent service (oma-openviking) is managed by its own script:
+# start-openviking.sh.
 set -euo pipefail
 
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -205,9 +205,8 @@ Commands:
   setup-mirror  Configure Docker daemon to use a domestic registry mirror
   smoke         Run scripts/e2e/smoke-test.sh against the running stack
 
-Independent services (managed separately):
+Independent service (managed separately):
   oma-openviking  ./openviking/start-openviking.sh {start|stop|restart|status|logs}
-  oma-deepseek    ./deepseek/start-deepseek.sh   {start|stop|restart|status|logs}
 
 Examples:
   $(basename "$0")
@@ -218,7 +217,6 @@ Examples:
   $(basename "$0") down
 
   ./openviking/start-openviking.sh start
-  ./deepseek/start-deepseek.sh   start
 
   # Or without docker.sh (must pass parent .env for build-arg substitution):
   docker compose --env-file ../.env -f docker-compose.yml up -d --build --remove-orphans
@@ -228,7 +226,6 @@ Environment:
   Platform API: http://localhost:8787
   # Harness LB:   http://localhost:8090  (oma-harness-lb → harness-1/2)
   OpenViking:   http://localhost:1933  (oma-openviking, managed by start-openviking.sh)
-  DeepSeek:     http://localhost:3080  (oma-deepseek, managed by start-deepseek.sh)
 EOF
 }
 
@@ -236,7 +233,6 @@ print_endpoints() {
   echo "meta-harness: http://localhost:8787  (Console UI + /health)"
   # echo "oma-harness:  http://localhost:8090  (LB → oma-harness-1/2)"
   echo "oma-openviking: http://localhost:1933  (use openviking/start-openviking.sh to start)"
-  echo "oma-deepseek:   http://localhost:3080  (use deepseek/start-deepseek.sh to start)"
 }
 
 cmd="${1:-up}"
