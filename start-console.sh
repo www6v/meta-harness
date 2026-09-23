@@ -81,21 +81,57 @@ export OMA_DATABASE_PATH="${OMA_DATABASE_PATH:-${DATABASE_PATH}}"
 export OMA_INTERNAL_SECRET="${OMA_INTERNAL_SECRET:-}"
 export OMA_DEEPSEEK_GATEWAY_URL="${OMA_DEEPSEEK_GATEWAY_URL:-http://127.0.0.1:3080}"
 
+# Codex harness: the Python bridge (meta-harness-ext/ssh/codex_bridge.py)
+# speaks JSON-RPC over WebSocket (optionally SSH-tunneled) to the remote
+# codex app-server. The Go server talks to the bridge over HTTP.
+export OMA_CODEX_BRIDGE_URL="${OMA_CODEX_BRIDGE_URL:-http://127.0.0.1:8092}"
+export OMA_CODEX_ENABLED="${OMA_CODEX_ENABLED:-1}"
+# Bridge-level env vars (used by codex_bridge.py when it starts).
+export CODEX_LISTEN="${CODEX_LISTEN:-127.0.0.1:8092}"
+export CODEX_WS_URL="${CODEX_WS_URL:-ws://127.0.0.1:8765}"
+export CODEX_WS_TOKEN="${CODEX_WS_TOKEN:-codex-poc-token-2024}"
+export CODEX_SSH_HOST="${CODEX_SSH_HOST:-124.221.28.203}"
+export CODEX_SSH_USER="${CODEX_SSH_USER:-root}"
+export CODEX_SSH_PASSWORD="${CODEX_SSH_PASSWORD:-1qaZxsw@}"
+export CODEX_REMOTE_PORT="${CODEX_REMOTE_PORT:-8765}"
+
 # Free the service ports before starting (see _oma_free_port).
 _oma_free_port "${OMA_LISTEN_ADDR##*:}"
 _oma_free_port "${AUTH_UPSTREAM_URL##*:}"
 _oma_free_port "${OMA_OUTBOUND_PROXY_ADDR##*:}"
+_oma_free_port "${CODEX_LISTEN##*:}"
 
 if [[ -z "${DATABASE_URL:-}" ]]; then
   mkdir -p "$(dirname "${DATABASE_PATH}")"
 fi
 mkdir -p "${SANDBOX_WORKDIR}"
 
+# Start the Python codex bridge in the background. Prefers the meta-harness
+# python venv (has websockets + paramiko installed), falls back to system
+# python. Runs the bridge module as a package so relative imports resolve.
+_start_codex_bridge() {
+  local bridge_dir="${ROOT_DIR}/../meta-harness-ext/ssh"
+  local py=""
+  if [[ -x "${ROOT_DIR}/harness/.venv/bin/python" ]]; then
+    py="${ROOT_DIR}/harness/.venv/bin/python"
+  elif [[ -x "${ROOT_DIR}/harness/.venv/Scripts/python.exe" ]]; then
+    py="${ROOT_DIR}/harness/.venv/Scripts/python.exe"
+  else
+    py="${PYTHON:-python3}"
+  fi
+  ( cd "${bridge_dir}" && exec "${py}" codex_bridge.py ) &
+}
+
 AUTH_PID=""
+CODEX_BRIDGE_PID=""
 cleanup() {
   if [[ -n "${AUTH_PID}" ]] && kill -0 "${AUTH_PID}" 2>/dev/null; then
     kill "${AUTH_PID}" 2>/dev/null || true
     wait "${AUTH_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${CODEX_BRIDGE_PID}" ]] && kill -0 "${CODEX_BRIDGE_PID}" 2>/dev/null; then
+    kill "${CODEX_BRIDGE_PID}" 2>/dev/null || true
+    wait "${CODEX_BRIDGE_PID}" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT INT TERM
@@ -104,6 +140,16 @@ if [[ "${AUTH_DISABLED}" != "1" ]]; then
   echo "Starting auth sidecar on ${AUTH_UPSTREAM_URL}..."
   "${ROOT_DIR}/scripts/start-auth-sidecar.sh" &
   AUTH_PID=$!
+  sleep 1
+fi
+
+# Start the Codex harness bridge (Python) in the background. It exposes
+# POST /codex/turn on :8092 — the Go CodexClient calls this endpoint to
+# run a turn against the remote codex app-server via SSH + WebSocket.
+if [[ "${OMA_CODEX_ENABLED}" == "1" ]]; then
+  echo "Starting Codex bridge on ${CODEX_LISTEN}..."
+  _start_codex_bridge
+  CODEX_BRIDGE_PID=$!
   sleep 1
 fi
 

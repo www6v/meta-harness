@@ -10,7 +10,7 @@
  * Other types use structured Input/Output sections via getEventIO.
  */
 
-import { Link2Icon } from "lucide-react";
+import { DownloadIcon, FileIcon, Link2Icon } from "lucide-react";
 import { Markdown } from "../../components/Markdown";
 import {
   Message,
@@ -161,17 +161,26 @@ function renderToolCard(useEvent: Event, resultEvent?: Event) {
       : "output-available"
     : "input-available";
 
+  // Check for attached files on the result event.
+  const files = resultEvent
+    ? (resultEvent as { files?: FileAttachment[] }).files
+    : undefined;
+  const hasFiles = Array.isArray(files) && files.length > 0;
+
   return (
-    <Tool className="max-w-full">
-      <ToolHeader type="dynamic-tool" toolName={title} state={state} />
-      <ToolContent>
-        <ToolInput input={useEvent.input ?? {}} />
-        <ToolOutput
-          output={isError ? undefined : output}
-          errorText={errorText}
-        />
-      </ToolContent>
-    </Tool>
+    <>
+      <Tool className="max-w-full">
+        <ToolHeader type="dynamic-tool" toolName={title} state={state} />
+        <ToolContent>
+          <ToolInput input={useEvent.input ?? {}} />
+          <ToolOutput
+            output={isError ? undefined : output}
+            errorText={errorText}
+          />
+        </ToolContent>
+      </Tool>
+      {hasFiles && <FileAttachments files={files!} />}
+    </>
   );
 }
 
@@ -283,7 +292,17 @@ function renderEventContent(
     case "agent.mcp_tool_result":
     case "user.custom_tool_result": {
       if (pairedUse) {
-        return renderToolCard(pairedUse, event);
+        const toolCard = renderToolCard(pairedUse, event);
+        const files = (event as { files?: FileAttachment[] }).files;
+        if (Array.isArray(files) && files.length > 0) {
+          return (
+            <>
+              {toolCard}
+              <FileAttachments files={files} />
+            </>
+          );
+        }
+        return toolCard;
       }
       const rawContent = (event as { content?: unknown }).content;
       const output: unknown =
@@ -292,6 +311,7 @@ function renderEventContent(
           : typeof rawContent === "string"
             ? rawContent
             : JSON.stringify(rawContent, null, 2);
+      const files = (event as { files?: FileAttachment[] }).files;
       return (
         <Tool className="max-w-full">
           <ToolHeader
@@ -304,6 +324,9 @@ function renderEventContent(
           </ToolContent>
         </Tool>
       );
+      // Note: files on unpaired tool_results are rare — Codex always pairs
+      // tool_use/tool_result. If they occur, the FileAttachments render is
+      // handled in the paired path above.
     }
 
     case "session.error": {
@@ -349,4 +372,47 @@ function renderEventContent(
     default:
       return renderIOSections(event, pairedResult, pairedUse, modelErrorCause);
   }
+}
+
+/** File metadata attached to agent.tool_result events by the Codex harness. */
+export interface FileAttachment {
+  filename: string;
+  file_id: string;
+  media_type: string;
+  size_bytes: number;
+  download_url: string;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Renders a list of file attachments with download links. */
+function FileAttachments({ files }: { files: FileAttachment[] }) {
+  return (
+    <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-muted/30 p-3">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <FileIcon className="h-3.5 w-3.5" />
+        <span>{files.length} file{files.length > 1 ? "s" : ""} created</span>
+      </div>
+      {files.map((file) => (
+        <a
+          key={file.file_id}
+          href={file.download_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
+        >
+          <FileIcon className="h-4 w-4 shrink-0 text-blue-500" />
+          <span className="truncate font-medium">{file.filename}</span>
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {formatFileSize(file.size_bytes)}
+          </span>
+          <DownloadIcon className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        </a>
+      ))}
+    </div>
+  );
 }

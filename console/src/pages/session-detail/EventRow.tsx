@@ -12,6 +12,7 @@ import {
   AlertCircleIcon,
   BotIcon,
   ClockIcon,
+  FileIcon,
   InfoIcon,
   MessageSquareIcon,
   UserIcon,
@@ -306,6 +307,11 @@ function getEventSnippet(event: Event): string {
     }
     case "agent.tool_result":
     case "agent.mcp_tool_result": {
+      // Show file count if the tool result has attached files.
+      const files = (event as { files?: unknown[] }).files;
+      if (Array.isArray(files) && files.length > 0) {
+        return `${files.length} file${files.length > 1 ? "s" : ""} created`;
+      }
       return "Tool result";
     }
     case "session.error": {
@@ -331,6 +337,14 @@ function getEventBadge(event: Event): string | null {
     case "agent.mcp_tool_use": {
       const server = event.mcp_server_name;
       return server ? `mcp · ${server}` : event.name ?? null;
+    }
+    case "agent.tool_result":
+    case "agent.mcp_tool_result": {
+      const files = (event as { files?: unknown[] }).files;
+      if (Array.isArray(files) && files.length > 0) {
+        return `📎 ${files.length} file${files.length > 1 ? "s" : ""}`;
+      }
+      return null;
     }
     case "session.error": {
       const model = (event as { model?: string }).model;

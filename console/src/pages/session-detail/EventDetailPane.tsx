@@ -67,6 +67,14 @@ const CATEGORY_BADGE: Record<
     label: "System",
     className: "bg-gray-500 text-white",
   },
+  message: {
+    label: "Message",
+    className: "bg-blue-600 text-white",
+  },
+  auxiliary: {
+    label: "Auxiliary",
+    className: "bg-gray-600 text-white",
+  },
 };
 
 const TYPE_BADGE_CLASS: Record<string, string> = {

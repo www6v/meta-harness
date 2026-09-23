@@ -115,7 +115,7 @@ const INITIAL_FORM = {
   // deepseek) as _oma.harness. Mutually exclusive with runtimeId; the
   // harness dropdown enforces this. Legacy rows may still carry
   // harness:"managed" + runtime_binding.agent — normalized on read.
-  managedAgent: "" as "" | "hermes" | "openclaw" | "deepseek" | "codex",
+  managedAgent: "codex" as "" | "hermes" | "openclaw" | "deepseek" | "codex",
   // Built-in tool policy. `agent_toolset_20260401` toolset's
   // `default_config` controls fallback enabled/permission for any
   // tool without a specific override. `toolOverrides` is a per-tool
@@ -971,7 +971,8 @@ function BasicTab({
         // DeepSeek always enabled — it's a first-class harness and most
         // deployments won't have OMA_DEEPSEEK_GATEWAY_URL set yet.
         const deepseek = true;
-        const codex = res?.codex === true;
+        // Codex defaults to enabled; only disabled if server explicitly returns false.
+        const codex = res?.codex !== false;
         // eslint-disable-next-line no-console
         console.info("[harness-config] openclaw=%s hermes=%s deepseek=%s codex=%s raw=%o", openclaw, hermes, deepseek, codex, res);
         setManagedHarness({ openclaw, hermes, deepseek, codex });
@@ -1168,6 +1169,9 @@ function BasicTab({
           }}
           placeholder="— Cloud (piPy) —"
         >
+          <SelectOption value="__managed_codex__" disabled={!managedHarness.codex}>
+            — Codex (OpenAI) —
+          </SelectOption>
           <SelectOption value="__managed_deepseek__" disabled={!managedHarness.deepseek}>
             — DeepSeek harness —
             {!managedHarness.deepseek ? " — disabled" : ""}
@@ -1182,10 +1186,6 @@ function BasicTab({
             <SelectOption value="__managed_openclaw__" disabled={!managedHarness.openclaw}>
               — OpenClaw —
               {!managedHarness.openclaw ? " — disabled" : ""}
-            </SelectOption>
-            <SelectOption value="__managed_codex__" disabled={!managedHarness.codex}>
-              — Codex (OpenAI) —
-              {!managedHarness.codex ? " — disabled" : ""}
             </SelectOption>
           </SelectGroup>
           {runtimes.length > 0 && (

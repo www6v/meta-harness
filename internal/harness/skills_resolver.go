@@ -9,7 +9,7 @@ import (
 	"github.com/open-ma/oma-building/internal/store"
 )
 
-const skillMountRoot = "home/user/.skills"
+const skillMountRoot = "home/codex/.codex/skills"
 
 // ResolveSkillsForTurn resolves agent.skills into harness-ready payloads
 // with inlined SKILL.md and file bytes for sandbox mounting (AMA-aligned).
@@ -149,7 +149,7 @@ func (r *ResourceResolver) resolveOneSkill(
 		"display_name":           displayName,
 		"source":                 meta.Source,
 		"version":                version,
-		"mount_root":             fmt.Sprintf("/home/user/.skills/%s", mountName),
+		"mount_root":             fmt.Sprintf("/home/codex/.codex/skills/%s", mountName),
 		"system_prompt_addition": addition,
 		"files":                  filesOut,
 	}, nil
@@ -180,7 +180,7 @@ func resolveBuiltinSkill(skillID string) map[string]any {
 		"name":                   name,
 		"display_name":           displayName,
 		"source":                 "anthropic",
-		"mount_root":             fmt.Sprintf("/home/user/.skills/%s", name),
+		"mount_root":             fmt.Sprintf("/home/codex/.codex/skills/%s", name),
 		"system_prompt_addition": addition,
 		"files":                  []any{},
 	}
@@ -201,7 +201,7 @@ func skillPromptAddition(
 		desc = "See SKILL.md for instructions."
 	}
 	return fmt.Sprintf(
-		"[Skill: %s] %s Read /home/user/.skills/%s/SKILL.md for instructions.",
+		"[Skill: %s] %s Read /home/codex/.codex/skills/%s/SKILL.md for instructions.",
 		displayName,
 		desc,
 		mountName,
