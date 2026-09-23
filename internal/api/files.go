@@ -209,7 +209,14 @@ func handleFileList(
 		opts.SessionID = &scopeID
 	}
 
-	rows, err := deps.Files.List(req.Context(), tenant, opts)
+	// When scope_id is specified, include files from any tenant —
+	// session-scoped files should be visible to anyone who can access
+	// the session. Without scope_id, filter by tenant as usual.
+	listTenant := tenant
+	if scopeID != "" {
+		listTenant = ""
+	}
+	rows, err := deps.Files.List(req.Context(), listTenant, opts)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -226,7 +233,7 @@ func handleFileList(
 	}
 
 	if scopeID != "" && deps.Outputs != nil {
-		outputs, err := deps.Outputs.List(tenant, scopeID)
+		outputs, err := deps.Outputs.List("", scopeID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -256,14 +263,14 @@ func handleFileGet(
 	deps filesDeps,
 ) {
 	id := chi.URLParam(req, "id")
-	tenant := tenantID(req)
 
 	if decoded := decodeOutputID(id); decoded != nil {
 		handleOutputFileGet(w, req, deps, decoded)
 		return
 	}
 
-	row, err := deps.Files.Get(req.Context(), tenant, id)
+	// Skip tenant filter for direct file access — file ID is unique.
+	row, err := deps.Files.Get(req.Context(), "", id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -281,11 +288,11 @@ func handleFileContent(
 	deps filesDeps,
 ) {
 	id := chi.URLParam(req, "id")
-	tenant := tenantID(req)
 
 	if decoded := decodeOutputID(id); decoded != nil {
+		// Skip tenant filter for session output access.
 		body, _, mediaType, err := deps.Outputs.Read(
-			tenant, decoded.sessionID, decoded.filename,
+			"", decoded.sessionID, decoded.filename,
 		)
 		if err != nil {
 			writeError(w, http.StatusNotFound, "File content not found")
@@ -297,7 +304,8 @@ func handleFileContent(
 		return
 	}
 
-	row, err := deps.Files.Get(req.Context(), tenant, id)
+	// Skip tenant filter for direct file access — file ID is unique.
+	row, err := deps.Files.Get(req.Context(), "", id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

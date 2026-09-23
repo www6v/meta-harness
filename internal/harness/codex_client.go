@@ -243,7 +243,7 @@ func (c *CodexClient) uploadFiles(
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
 		if req.TenantID != "" {
-			httpReq.Header.Set("X-OMA-Tenant", req.TenantID)
+			httpReq.Header.Set("x-active-tenant", req.TenantID)
 		}
 		if req.InternalSecret != "" {
 			httpReq.Header.Set("X-API-Key", req.InternalSecret)

@@ -110,6 +110,9 @@ interface SessionOutputFile {
   size_bytes: number;
   uploaded_at: string;
   media_type: string;
+  // OMA Files API fields
+  file_id?: string;
+  download_url?: string;
 }
 
 function formatBytes(n: number): string {
@@ -131,34 +134,109 @@ export function FilesPanel({
   const [err, setErr] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
 
-  // Use deepseek-harness RPC client for session outputs
-  const rpcClient = useState(() => new DeepSeekRpcClient(window.location.origin))[0];
-
   useEffect(() => {
     setFiles(null);
     setErr(null);
-    // Use RPC client to list session output files
-    rpcClient.listSessionOutputs(sessionId)
-      .then((d) => setFiles(d))
-      .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
-  }, [sessionId, rpcClient]);
 
-  const handleDownload = async (filename: string) => {
-    setDownloading(filename);
+    // Step 1: Fetch session to get agent_id, then fetch agent to determine harness.
+    api<{ id: string; agent_id: string; agent?: { id: string } }>(`/v1/sessions/${sessionId}`)
+      .then((session) => {
+        const agentId = session.agent_id || session.agent?.id;
+        if (!agentId) {
+          // No agent_id — try OMA Files API directly (session may be archived)
+          return fetchFilesFromOma();
+        }
+        return api<{ _oma?: { harness?: string } }>(`/v1/agents/${agentId}`)
+          .then((agent) => {
+            const harness = agent._oma?.harness || "";
+            if (harness === "codex") {
+              // Codex harness: use OMA Files API
+              return fetchFilesFromOma();
+            } else if (harness === "deepseek") {
+              // DeepSeek harness: use DeepSeek RPC
+              const rpcClient = new DeepSeekRpcClient(window.location.origin);
+              return rpcClient.listSessionOutputs(sessionId)
+                .then((d) => setFiles(d))
+                .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+            } else {
+              // Unknown harness: try OMA Files API, then DeepSeek RPC
+              return fetchFilesFromOma().then((omaFiles) => {
+                if (omaFiles && omaFiles.length > 0) {
+                  setFiles(omaFiles);
+                } else {
+                  const rpcClient = new DeepSeekRpcClient(window.location.origin);
+                  return rpcClient.listSessionOutputs(sessionId)
+                    .then((d) => setFiles(d));
+                }
+              });
+            }
+          })
+          .catch(() => {
+            // Agent API failed — try OMA Files API directly
+            return fetchFilesFromOma();
+          });
+      })
+      .catch(() => {
+        // Session API failed — try OMA Files API directly (session may be archived)
+        return fetchFilesFromOma();
+      });
+
+    function fetchFilesFromOma() {
+      return api<{ data: Array<{
+        id: string;
+        filename: string;
+        media_type: string;
+        size_bytes: number;
+        created_at: string;
+        downloadable: boolean;
+      }> }>(`/v1/files?scope_id=${encodeURIComponent(sessionId)}&limit=200`)
+        .then((resp) => {
+          const omaFiles = (resp.data || []).map((f) => ({
+            filename: f.filename,
+            size_bytes: f.size_bytes,
+            uploaded_at: f.created_at,
+            media_type: f.media_type,
+            file_id: f.id,
+            download_url: `/v1/files/${f.id}/content`,
+          }));
+          setFiles(omaFiles);
+        })
+        .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+    }
+  }, [sessionId]);
+
+  const handleDownload = async (file: SessionOutputFile) => {
+    setDownloading(file.filename);
     try {
-      const result = await rpcClient.readSessionOutputFileBytes(sessionId, filename);
-      // Create blob and download
-      const blob = new Blob([result.bytes], { type: result.mediaType });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      if (file.download_url) {
+        // Download via OMA Files API
+        const resp = await fetch(file.download_url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = file.filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } else {
+        // Fall back to DeepSeek RPC
+        const rpcClient = new DeepSeekRpcClient(window.location.origin);
+        const result = await rpcClient.readSessionOutputFileBytes(sessionId, file.filename);
+        const blob = new Blob([result.bytes], { type: result.mediaType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = file.filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
     } catch (e) {
-      console.error("download failed", filename, e);
+      console.error("download failed", file.filename, e);
     }
     setDownloading(null);
   };
@@ -189,19 +267,19 @@ export function FilesPanel({
         {!files && !err && <div className="text-fg-subtle">Loading…</div>}
         {files && files.length === 0 && (
           <div className="text-fg-subtle">
-            No files yet. The agent must write under <code className="font-mono">/mnt/session/outputs/</code> for files to appear here.
+            No files yet. The agent must write files during the session for them to appear here.
           </div>
         )}
         {files && files.length > 0 && (
           <ul className="space-y-1.5">
             {files.map((f) => (
               <li
-                key={f.filename}
+                key={f.file_id || f.filename}
                 className="flex items-center gap-3 py-2"
               >
                 <div className="min-w-0 flex-1">
                   <button
-                    onClick={() => handleDownload(f.filename)}
+                    onClick={() => handleDownload(f)}
                     disabled={downloading === f.filename}
                     className="font-mono text-fg hover:text-info truncate block text-left w-full disabled:opacity-50 disabled:cursor-not-allowed"
                     title={f.filename}

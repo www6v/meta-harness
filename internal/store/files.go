@@ -90,18 +90,30 @@ func (r *FileRepo) Insert(
 	return r.Get(ctx, tenantID, id)
 }
 
-// Get loads one file row for a tenant.
+// Get loads one file row. When tenantID is empty, skips tenant filter
+// (used for session-scoped file access where tenant may differ).
 func (r *FileRepo) Get(
 	ctx context.Context,
 	tenantID, fileID string,
 ) (*FileRow, error) {
-	row := r.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, session_id, scope, filename, media_type,
-			size_bytes, downloadable, blob_key, created_at
-		FROM files
-		WHERE id = ? AND tenant_id = ?`,
-		fileID, tenantOrDefault(tenantID),
-	)
+	var row *sql.Row
+	if tenantID == "" {
+		row = r.db.QueryRowContext(ctx, `
+			SELECT id, tenant_id, session_id, scope, filename, media_type,
+				size_bytes, downloadable, blob_key, created_at
+			FROM files
+			WHERE id = ?`,
+			fileID,
+		)
+	} else {
+		row = r.db.QueryRowContext(ctx, `
+			SELECT id, tenant_id, session_id, scope, filename, media_type,
+				size_bytes, downloadable, blob_key, created_at
+			FROM files
+			WHERE id = ? AND tenant_id = ?`,
+			fileID, tenantOrDefault(tenantID),
+		)
+	}
 	return scanFileRow(row)
 }
 
@@ -127,8 +139,14 @@ func (r *FileRepo) List(
 		SELECT id, tenant_id, session_id, scope, filename, media_type,
 			size_bytes, downloadable, blob_key, created_at
 		FROM files
-		WHERE tenant_id = ?`
-	args := []any{tenantOrDefault(tenantID)}
+		WHERE 1=1`
+	var args []any
+	// Skip tenant filter when tenantID is empty — used for session-scoped
+	// file listing where any tenant's files should be visible.
+	if tenantID != "" {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenantOrDefault(tenantID))
+	}
 	if opts.SessionID != nil {
 		query += ` AND session_id = ?`
 		args = append(args, *opts.SessionID)

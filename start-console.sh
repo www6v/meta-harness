@@ -79,7 +79,7 @@ export PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-http://127.0.0.1:8787}"
 export AUTH_DATABASE_PATH="${AUTH_DATABASE_PATH:-${ROOT_DIR}/data/auth.db}"
 export OMA_DATABASE_PATH="${OMA_DATABASE_PATH:-${DATABASE_PATH}}"
 export OMA_INTERNAL_SECRET="${OMA_INTERNAL_SECRET:-}"
-export OMA_DEEPSEEK_GATEWAY_URL="${OMA_DEEPSEEK_GATEWAY_URL:-http://127.0.0.1:3080}"
+# export OMA_DEEPSEEK_GATEWAY_URL="${OMA_DEEPSEEK_GATEWAY_URL:-http://127.0.0.1:3080}"
 
 # Codex harness: the Python bridge (meta-harness-ext/ssh/codex_bridge.py)
 # speaks JSON-RPC over WebSocket (optionally SSH-tunneled) to the remote
@@ -88,12 +88,8 @@ export OMA_CODEX_BRIDGE_URL="${OMA_CODEX_BRIDGE_URL:-http://127.0.0.1:8092}"
 export OMA_CODEX_ENABLED="${OMA_CODEX_ENABLED:-1}"
 # Bridge-level env vars (used by codex_bridge.py when it starts).
 export CODEX_LISTEN="${CODEX_LISTEN:-127.0.0.1:8092}"
-export CODEX_WS_URL="${CODEX_WS_URL:-ws://127.0.0.1:8765}"
+export CODEX_WS_URL="${CODEX_WS_URL:-ws://124.221.28.203:8765}"
 export CODEX_WS_TOKEN="${CODEX_WS_TOKEN:-codex-poc-token-2024}"
-export CODEX_SSH_HOST="${CODEX_SSH_HOST:-124.221.28.203}"
-export CODEX_SSH_USER="${CODEX_SSH_USER:-root}"
-export CODEX_SSH_PASSWORD="${CODEX_SSH_PASSWORD:-1qaZxsw@}"
-export CODEX_REMOTE_PORT="${CODEX_REMOTE_PORT:-8765}"
 
 # Free the service ports before starting (see _oma_free_port).
 _oma_free_port "${OMA_LISTEN_ADDR##*:}"
@@ -146,7 +142,7 @@ fi
 # Start the Codex harness bridge (Python) in the background. It exposes
 # POST /codex/turn on :8092 — the Go CodexClient calls this endpoint to
 # run a turn against the remote codex app-server via SSH + WebSocket.
-if [[ "${OMA_CODEX_ENABLED}" == "1" ]]; then
+if [[ "${OMA_CODEX_ENABLED}" == "1" || "${OMA_CODEX_ENABLED}" == "true" ]]; then
   echo "Starting Codex bridge on ${CODEX_LISTEN}..."
   _start_codex_bridge
   CODEX_BRIDGE_PID=$!
