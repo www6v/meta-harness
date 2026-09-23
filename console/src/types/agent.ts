@@ -30,7 +30,7 @@ export interface AgentRecord {
    *  wire-format AgentConfig (those fields live in OMA-private storage).
    *
    *  Flat harness kinds (2026-08 flattening): "hermes" | "openclaw" |
-   *  "deepseek" select a gateway harness with no runtime_binding.
+   *  "deepseek" | "codex" select a gateway harness with no runtime_binding.
    *  "acp-proxy" keeps `runtime_binding.runtime_id + acp_agent_id`.
    *  Legacy rows may still carry `harness: "managed"` +
    *  `runtime_binding.agent` — normalized by the server at dispatch.
@@ -43,6 +43,7 @@ export interface AgentRecord {
       | "hermes"
       | "openclaw"
       | "deepseek"
+      | "codex"
       | (string & {});
     runtime_binding?:
       | { runtime_id: string; acp_agent_id: string; local_skill_blocklist?: string[] }

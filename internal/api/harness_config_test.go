@@ -99,41 +99,53 @@ func TestHarnessConfigEndpoint_DeepSeekOnly(t *testing.T) {
 
 func TestHarnessAvailability(t *testing.T) {
 	cases := []struct {
-		name                   string
-		oc                     harness.OpenClawConfig
-		hc                     harness.HermesConfig
-		ds                     harness.DeepSeekConfig
-		wantOC, wantHC, wantDS bool
+		name                                   string
+		oc                                     harness.OpenClawConfig
+		hc                                     harness.HermesConfig
+		ds                                     harness.DeepSeekConfig
+		cc                                     harness.CodexConfig
+		wantOC, wantHC, wantDS, wantCC         bool
 	}{
 		{
 			name:   "disabled overrides URL",
 			oc:     harness.OpenClawConfig{GatewayURL: "http://x", Disabled: true},
 			hc:     harness.HermesConfig{GatewayURL: "http://y"},
 			ds:     harness.DeepSeekConfig{GatewayURL: "http://z"},
-			wantOC: false, wantHC: true, wantDS: true,
+			cc:     harness.CodexConfig{BridgeURL: "http://w"},
+			wantOC: false, wantHC: true, wantDS: true, wantCC: true,
 		},
 		{
 			name:   "empty URL counts as disabled",
 			oc:     harness.OpenClawConfig{},
 			hc:     harness.HermesConfig{},
 			ds:     harness.DeepSeekConfig{},
-			wantOC: false, wantHC: false, wantDS: false,
+			cc:     harness.CodexConfig{},
+			wantOC: false, wantHC: false, wantDS: false, wantCC: false,
 		},
 		{
 			name:   "URL without disabled flag is enabled",
 			oc:     harness.OpenClawConfig{GatewayURL: "http://x"},
 			hc:     harness.HermesConfig{GatewayURL: "http://y"},
 			ds:     harness.DeepSeekConfig{GatewayURL: "http://z"},
-			wantOC: true, wantHC: true, wantDS: true,
+			cc:     harness.CodexConfig{BridgeURL: "http://w"},
+			wantOC: true, wantHC: true, wantDS: true, wantCC: true,
+		},
+		{
+			name:   "codex disabled overrides URL",
+			oc:     harness.OpenClawConfig{},
+			hc:     harness.HermesConfig{},
+			ds:     harness.DeepSeekConfig{},
+			cc:     harness.CodexConfig{BridgeURL: "http://w", Disabled: true},
+			wantOC: false, wantHC: false, wantDS: false, wantCC: false,
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := harness.HarnessAvailability(c.oc, c.hc, c.ds)
+			got := harness.HarnessAvailability(c.oc, c.hc, c.ds, c.cc)
 			if got.OpenClaw != c.wantOC || got.Hermes != c.wantHC ||
-				got.DeepSeek != c.wantDS {
-				t.Errorf("HarnessAvailability = %+v, want OC=%v HC=%v DS=%v",
-					got, c.wantOC, c.wantHC, c.wantDS)
+				got.DeepSeek != c.wantDS || got.Codex != c.wantCC {
+				t.Errorf("HarnessAvailability = %+v, want OC=%v HC=%v DS=%v CC=%v",
+					got, c.wantOC, c.wantHC, c.wantDS, c.wantCC)
 			}
 		})
 	}

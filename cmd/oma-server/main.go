@@ -194,6 +194,10 @@ func main() {
 		Token:      os.Getenv("OMA_DEEPSEEK_TOKEN"),
 		Disabled:   envDisabled("OMA_DEEPSEEK_ENABLED"),
 	}
+	codexCfg := harness.CodexConfig{
+		BridgeURL: os.Getenv("OMA_CODEX_BRIDGE_URL"),
+		Disabled:  envDisabled("OMA_CODEX_ENABLED"),
+	}
 	harnessRegistry := harness.NewRegistry(harness.RegistryConfig{
 		Default: harnessClient,
 		Force:   harnessForceOverride,
@@ -220,6 +224,7 @@ func main() {
 					Token:      deepseekCfg.Token,
 				}
 			}),
+		Codex: harnessCodexClient(codexCfg),
 	})
 	effectiveHarness := harnessClient
 	if harnessForceOverride != nil {
@@ -412,7 +417,7 @@ func main() {
 		RateLimit:         rateGates,
 		OAuthState:        oauthState,
 		PublicURL:         publicURL,
-		ManagedHarness:    harness.HarnessAvailability(openclawCfg, hermesCfg, deepseekCfg),
+		ManagedHarness:    harness.HarnessAvailability(openclawCfg, hermesCfg, deepseekCfg, codexCfg),
 	})
 
 	log.Printf("oma-server listening on %s", addr)
@@ -481,4 +486,16 @@ func harnessGatewayClient(
 		return nil
 	}
 	return build()
+}
+
+// harnessCodexClient returns a CodexClient when the bridge URL is
+// configured, otherwise nil. Codex is a little different from the
+// gateway clients — it talks to a local Python bridge rather than a
+// remote gateway — so we wire it through its own helper to keep the
+// Registry construction site tidy.
+func harnessCodexClient(cfg harness.CodexConfig) harness.Client {
+	if cfg.Disabled || cfg.BridgeURL == "" {
+		return nil
+	}
+	return &harness.CodexClient{BridgeURL: cfg.BridgeURL}
 }

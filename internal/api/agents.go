@@ -215,6 +215,7 @@ var flatHarnessKinds = map[string]bool{
 	"hermes":       true,
 	"openclaw":     true,
 	"deepseek":     true,
+	"codex":        true,
 	"fake":         true,
 	"acp-proxy":    true, // ACP overlay path — validation lives elsewhere
 	"managed":      true, // legacy two-layer form, validated below

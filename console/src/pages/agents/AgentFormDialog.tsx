@@ -115,7 +115,7 @@ const INITIAL_FORM = {
   // deepseek) as _oma.harness. Mutually exclusive with runtimeId; the
   // harness dropdown enforces this. Legacy rows may still carry
   // harness:"managed" + runtime_binding.agent — normalized on read.
-  managedAgent: "" as "" | "hermes" | "openclaw" | "deepseek",
+  managedAgent: "" as "" | "hermes" | "openclaw" | "deepseek" | "codex",
   // Built-in tool policy. `agent_toolset_20260401` toolset's
   // `default_config` controls fallback enabled/permission for any
   // tool without a specific override. `toolOverrides` is a per-tool
@@ -494,7 +494,7 @@ export function AgentFormDialog({
         // Flat kinds select the gateway directly; legacy rows carry
         // harness="managed" + runtime_binding.agent and are normalized
         // here so old configs still edit correctly.
-        const flatKinds = ["hermes", "openclaw", "deepseek"];
+        const flatKinds = ["hermes", "openclaw", "deepseek", "codex"];
         const managedAgent = flatKinds.includes(harness)
           ? harness
           : harness === "managed" &&
@@ -548,7 +548,7 @@ export function AgentFormDialog({
           localSkillBlocklist: Array.isArray(rb?.local_skill_blocklist)
             ? rb.local_skill_blocklist
             : [],
-          managedAgent: managedAgent as "" | "hermes" | "openclaw" | "deepseek",
+          managedAgent: managedAgent as "" | "hermes" | "openclaw" | "deepseek" | "codex",
           toolDefaultEnabled: dc.enabled ?? true,
           toolDefaultPermission:
             dc.permission_policy?.type === "always_ask" ? "always_ask" : "always_allow",
@@ -959,10 +959,11 @@ function BasicTab({
     openclaw: boolean;
     hermes: boolean;
     deepseek: boolean;
-  }>({ openclaw: true, hermes: true, deepseek: true });
+    codex: boolean;
+  }>({ openclaw: true, hermes: true, deepseek: true, codex: true });
   useEffect(() => {
     let cancelled = false;
-    api<{ openclaw?: boolean; hermes?: boolean; deepseek?: boolean }>("/v1/config/harnesses")
+    api<{ openclaw?: boolean; hermes?: boolean; deepseek?: boolean; codex?: boolean }>("/v1/config/harnesses")
       .then((res) => {
         if (cancelled) return;
         const openclaw = res?.openclaw !== false;
@@ -970,9 +971,10 @@ function BasicTab({
         // DeepSeek always enabled — it's a first-class harness and most
         // deployments won't have OMA_DEEPSEEK_GATEWAY_URL set yet.
         const deepseek = true;
+        const codex = res?.codex === true;
         // eslint-disable-next-line no-console
-        console.info("[harness-config] openclaw=%s hermes=%s deepseek=%s raw=%o", openclaw, hermes, deepseek, res);
-        setManagedHarness({ openclaw, hermes, deepseek });
+        console.info("[harness-config] openclaw=%s hermes=%s deepseek=%s codex=%s raw=%o", openclaw, hermes, deepseek, codex, res);
+        setManagedHarness({ openclaw, hermes, deepseek, codex });
       })
       .catch((err) => {
         // eslint-disable-next-line no-console
@@ -1061,7 +1063,9 @@ function BasicTab({
             ? "Hermes"
             : form.managedAgent === "deepseek"
               ? "DeepSeek"
-              : "OpenClaw"}{" "}
+              : form.managedAgent === "codex"
+                ? "Codex"
+                : "OpenClaw"}{" "}
           gateway — it uses its own LLM credentials.
         </p>
       )}
@@ -1142,7 +1146,7 @@ function BasicTab({
               return;
             }
             if (v.startsWith("__managed_")) {
-              const agent = v.slice("__managed_".length, -2) as "hermes" | "openclaw" | "deepseek";
+              const agent = v.slice("__managed_".length, -2) as "hermes" | "openclaw" | "deepseek" | "codex";
               setForm({
                 ...form,
                 runtimeId: "",
@@ -1179,6 +1183,10 @@ function BasicTab({
               — OpenClaw —
               {!managedHarness.openclaw ? " — disabled" : ""}
             </SelectOption>
+            <SelectOption value="__managed_codex__" disabled={!managedHarness.codex}>
+              — Codex (OpenAI) —
+              {!managedHarness.codex ? " — disabled" : ""}
+            </SelectOption>
           </SelectGroup>
           {runtimes.length > 0 && (
             <SelectGroup>
@@ -1202,7 +1210,9 @@ function BasicTab({
               ? "Hermes"
               : form.managedAgent === "deepseek"
                 ? "DeepSeek"
-                : "OpenClaw"}{" "}
+                : form.managedAgent === "codex"
+                  ? "Codex"
+                  : "OpenClaw"}{" "}
             gateway — no daemon to install. The full conversation history is replayed each turn (stateless).
           </p>
         )}

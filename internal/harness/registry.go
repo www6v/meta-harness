@@ -28,6 +28,11 @@ const (
 	// Declared here so validation/state code has the constant; the
 	// dispatch case lands with DeepSeekClient.
 	KindDeepSeek Kind = "deepseek"
+	// KindCodex is the OpenAI Codex harness client. Turns are
+	// dispatched to the Python bridge at meta-harness-ext/ssh/ which
+	// speaks JSON-RPC over WebSocket (optionally tunneled via SSH) to
+	// the remote codex app-server.
+	KindCodex Kind = "codex"
 	// KindFake is the test stub. OMA_FAKE_HARNESS env var resolves here.
 	KindFake Kind = "fake"
 )
@@ -116,6 +121,7 @@ type Registry struct {
 	hermesClient   Client
 	openclawClient Client
 	deepseekClient Client
+	codexClient    Client
 	fakeClient     Client
 	forceClient    Client // if non-nil, returned for every agent (env-var override)
 }
@@ -137,6 +143,9 @@ type RegistryConfig struct {
 	// DeepSeek is the client for KindDeepSeek. Nil falls back to the
 	// ManagedClient stub.
 	DeepSeek Client
+	// Codex is the client for KindCodex. Nil falls back to the
+	// ManagedClient stub.
+	Codex Client
 	// Fake is the client returned for KindFake. Defaults to &FakeClient{}
 	// when nil.
 	Fake Client
@@ -158,6 +167,7 @@ func NewRegistry(cfg RegistryConfig) *Registry {
 		hermesClient:   cfg.Hermes,
 		openclawClient: cfg.OpenClaw,
 		deepseekClient: cfg.DeepSeek,
+		codexClient:    cfg.Codex,
 		fakeClient:     fake,
 		forceClient:    cfg.Force,
 	}
@@ -185,7 +195,7 @@ func normalizeKind(agent store.AgentConfig) (Kind, error) {
 		return KindDefaultLoop, nil
 	case "pipy":
 		return KindDefaultLoop, nil
-	case KindDefaultLoop, KindHermes, KindOpenClaw, KindDeepSeek, KindFake:
+	case KindDefaultLoop, KindHermes, KindOpenClaw, KindDeepSeek, KindCodex, KindFake:
 		return kind, nil
 	case KindManaged:
 		b, err := ParseManagedBinding(agent.RuntimeBinding)
@@ -249,6 +259,11 @@ func (r *Registry) ClientFor(agent store.AgentConfig) (Client, error) {
 			return ManagedClient{}, nil
 		}
 		return r.deepseekClient, nil
+	case KindCodex:
+		if r.codexClient == nil {
+			return ManagedClient{}, nil
+		}
+		return r.codexClient, nil
 	case KindFake:
 		return r.fakeClient, nil
 	}
@@ -277,6 +292,7 @@ type HarnessState struct {
 	OpenClaw bool `json:"openclaw"`
 	Hermes   bool `json:"hermes"`
 	DeepSeek bool `json:"deepseek"`
+	Codex    bool `json:"codex"`
 }
 
 // HarnessAvailability returns the on/off state of each gateway harness
@@ -286,11 +302,13 @@ func HarnessAvailability(
 	oc OpenClawConfig,
 	hc HermesConfig,
 	ds DeepSeekConfig,
+	cc CodexConfig,
 ) HarnessState {
 	return HarnessState{
 		OpenClaw: !oc.Disabled && oc.GatewayURL != "",
 		Hermes:   !hc.Disabled && hc.GatewayURL != "",
 		DeepSeek: !ds.Disabled && ds.GatewayURL != "",
+		Codex:    !cc.Disabled && cc.BridgeURL != "",
 	}
 }
 
@@ -306,5 +324,17 @@ type DeepSeekConfig struct {
 	// the field exists for future upstream support and reverse proxies.
 	Token string
 	// Disabled toggles the DeepSeek harness off.
+	Disabled bool
+}
+
+// CodexConfig holds the configuration for the Codex harness. The
+// actual codex app-server lives in a remote container; the Go side
+// talks to the Python bridge (meta-harness-ext/ssh/codex_bridge.py)
+// which does the SSH + WebSocket dance.
+type CodexConfig struct {
+	// BridgeURL is the Python bridge HTTP base, e.g.
+	// "http://127.0.0.1:8092". No trailing slash.
+	BridgeURL string
+	// Disabled toggles the Codex harness off.
 	Disabled bool
 }
