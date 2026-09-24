@@ -80,23 +80,39 @@ export function EventDetail({
   onViewInDebug,
   mergedEvents,
 }: EventDetailProps) {
-  // Merged consecutive agent.message events are streaming fragments —
-  // concatenate into one Markdown message instead of stacking each
-  // fragment as its own bubble (which breaks Markdown and readability).
+  // Merged consecutive agent.message / agent.thinking events are cumulative
+  // streaming fragments — use the merged (final) text instead of the
+  // primaryEvent (first, shortest fragment) so the detail pane matches
+  // what the transcript row shows.
   const allAgentMessages =
     mergedEvents !== undefined &&
     mergedEvents.length > 1 &&
     mergedEvents.every((e) => e.type === "agent.message");
+  const allAgentThinking =
+    mergedEvents !== undefined &&
+    mergedEvents.length > 1 &&
+    mergedEvents.every((e) => e.type === "agent.thinking");
 
-  const content = allAgentMessages
-    ? (
-        <Message from="assistant" className="max-w-full">
-          <MessageContent className="w-full">
-            <Markdown>{getMergedEventText(mergedEvents)}</Markdown>
-          </MessageContent>
-        </Message>
-      )
-    : renderEventContent(event, pairedResult, pairedUse, modelErrorCause);
+  let content: React.ReactNode;
+  if (allAgentMessages) {
+    content = (
+      <Message from="assistant" className="max-w-full">
+        <MessageContent className="w-full">
+          <Markdown>{getMergedEventText(mergedEvents)}</Markdown>
+        </MessageContent>
+      </Message>
+    );
+  } else if (allAgentThinking) {
+    const mergedText = getMergedEventText(mergedEvents);
+    content = (
+      <Reasoning defaultOpen>
+        <ReasoningTrigger />
+        <ReasoningContent>{mergedText}</ReasoningContent>
+      </Reasoning>
+    );
+  } else {
+    content = renderEventContent(event, pairedResult, pairedUse, modelErrorCause);
+  }
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-3">

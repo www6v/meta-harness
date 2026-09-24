@@ -23,6 +23,12 @@ func (r *Registry) EnqueueEvents(
 		return err
 	}
 
+	// Auto-recover sessions stuck in "running" after a server restart or
+	// harness error that skipped publishStatusIdle. If the DB row says
+	// "running" but no in-memory turn is active, force-idle the session
+	// so the frontend can resume interaction immediately.
+	lane.machine.RecoverStuckRunningOnInterrupt(ctx)
+
 	var pendingEvents []json.RawMessage
 	var directEvents []json.RawMessage
 	interruptThread := defaultThreadID

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"path/filepath"
 	"sync"
@@ -123,13 +124,37 @@ func (m *Machine) RunTurn(ctx context.Context, threadID string) error {
 		m.activeTurnM.Unlock()
 	}()
 
-	if err := m.runSingleHarnessTurn(turnCtx, threadID); err != nil {
-		return err
+	// Always publish status_idle when the turn ends (success or error).
+	// Previously, errors in runSingleHarnessTurn returned early without
+	// publishing status_idle, leaving the session stuck in "running"
+	// state in the frontend forever. runSingleHarnessTurn's own defer
+	// EndTurn() resets the DB row to idle, but the SSE status_idle event
+	// must also be emitted so the frontend updates.
+	var turnErr error
+	if turnErr = m.runSingleHarnessTurn(turnCtx, threadID); turnErr != nil {
+		log.Printf("session %s turn error: %v", m.SessionID, turnErr)
+	} else if turnErr = m.maybeRunOutcomeSupervisor(turnCtx, threadID); turnErr != nil {
+		log.Printf("session %s outcome supervisor error: %v", m.SessionID, turnErr)
 	}
-	if err := m.maybeRunOutcomeSupervisor(turnCtx, threadID); err != nil {
-		return err
+
+	// Always attempt to publish idle status, even if the turn errored.
+	// This ensures the frontend is notified the turn ended.
+	if idleErr := m.publishStatusIdle(ctx, nil); idleErr != nil {
+		log.Printf("session %s publishStatusIdle error: %v — falling back to minimal idle event", m.SessionID, idleErr)
+		// Fallback: publish a minimal status_idle event without computing
+		// stop_reason (avoids ListEvents call which may also fail).
+		minimalEvent, merr := json.Marshal(map[string]any{
+			"type":        "session.status_idle",
+			"stop_reason": map[string]any{"type": "end_turn"},
+		})
+		if merr == nil && m.Hub != nil {
+			m.Hub.Publish(m.SessionID, stream.Event{
+				Payload: minimalEvent,
+			})
+		}
 	}
-	return m.publishStatusIdle(ctx, nil)
+
+	return turnErr
 }
 
 func (m *Machine) runSingleHarnessTurn(ctx context.Context, threadID string) error {

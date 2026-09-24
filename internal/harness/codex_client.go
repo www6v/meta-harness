@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -200,18 +201,215 @@ func (c *CodexClient) httpClient() *http.Client {
 	return &http.Client{Timeout: 10 * time.Minute}
 }
 
-// RunTurnStream implements StreamingClient. It calls RunTurn (which handles
-// file upload internally), then emits each event via onEvent.
+// streamingHTTPClient returns an HTTP client with no overall timeout,
+// suitable for SSE streaming where the response body is read incrementally
+// and the connection may stay open for the full duration of a codex turn
+// (which can take 10+ minutes for complex multi-step tool-use turns).
+// The per-request context from the caller still controls cancellation.
+func (c *CodexClient) streamingHTTPClient() *http.Client {
+	if c.HTTP != nil {
+		return c.HTTP
+	}
+	return &http.Client{Timeout: 0} // no timeout; context controls cancellation
+}
+
+// RunTurnStream implements StreamingClient. It calls the bridge's SSE
+// streaming endpoint (/codex/turn/sse) so events are emitted via onEvent
+// as the codex model produces them — giving the frontend a live streaming
+// effect instead of a single batch at turn-end.
 func (c *CodexClient) RunTurnStream(
 	ctx context.Context,
 	req TurnRequest,
 	onEvent EventHandler,
 ) error {
-	resp, err := c.RunTurn(ctx, req)
+	body, err := json.Marshal(c.buildBridgeRequest(req))
 	if err != nil {
-		return err
+		return fmt.Errorf("codex marshal body: %w", err)
 	}
-	for _, ev := range resp.Events {
+	return c.streamTurnHTTP(ctx, body, onEvent)
+}
+
+// streamTurnHTTP POSTs to the bridge's /codex/turn/sse endpoint and reads
+// SSE frames, decoding each `data:` line as a JSON event and invoking
+// onEvent. Falls back to batch RunTurn if the bridge is too old to serve
+// the streaming endpoint.
+func (c *CodexClient) streamTurnHTTP(
+	ctx context.Context,
+	body []byte,
+	onEvent EventHandler,
+) error {
+	client := c.streamingHTTPClient()
+	url := c.BridgeURL + "/codex/turn/sse"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("codex build sse request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		// Streaming endpoint not available (old bridge) — fall back to batch.
+		log.Printf("codex: SSE endpoint unavailable (%v), falling back to batch", err)
+		return c.fallbackBatchStream(ctx, body, onEvent)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		// If the bridge doesn't support streaming (404), fall back to batch.
+		if resp.StatusCode == http.StatusNotFound {
+			log.Printf("codex: SSE endpoint not found, falling back to batch")
+			return c.fallbackBatchStream(ctx, body, onEvent)
+		}
+		return fmt.Errorf("codex bridge sse status=%d: %s", resp.StatusCode, string(respBody))
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+	var eventBuf strings.Builder
+	lastEventAt := time.Now()
+	noProgressTimeout := 10 * time.Second
+	// Overall stream timeout: if the stream doesn't close within 10 minutes,
+	// the bridge is likely stuck. This is a safety net for cases where the
+	// codex turn completes but the bridge never signals "done".
+	streamDeadline := time.Now().Add(10 * time.Minute)
+	eventCount := 0
+	log.Printf("codex: SSE stream started")
+
+	// Use a channel to read lines with a timeout, so we can detect when
+	// the bridge stops sending data (e.g., after the poison pill).
+	type scanResult struct {
+		line string
+		ok   bool
+		err  error
+	}
+	lineCh := make(chan scanResult, 1)
+	go func() {
+		for scanner.Scan() {
+			lineCh <- scanResult{line: scanner.Text(), ok: true}
+		}
+		lineCh <- scanResult{ok: false, err: scanner.Err()}
+	}()
+
+	for {
+		select {
+		case result := <-lineCh:
+			if !result.ok {
+				if result.err != nil {
+					log.Printf("codex: SSE scanner error: %v", result.err)
+					return fmt.Errorf("codex sse read: %w", result.err)
+				}
+				log.Printf("codex: SSE stream ended normally, received %d events", eventCount)
+				// Handle last frame if no trailing blank line.
+				if eventBuf.Len() > 0 {
+					var ev json.RawMessage
+					if err := json.Unmarshal([]byte(eventBuf.String()), &ev); err == nil {
+						_ = onEvent(ev)
+					}
+				}
+				return nil
+			}
+			line := result.line
+			if time.Now().After(streamDeadline) {
+				log.Printf("codex: SSE stream exceeded 10min deadline, aborting")
+				return fmt.Errorf("codex sse: stream exceeded 10min deadline")
+			}
+			if line == "" {
+				// Blank line = end of SSE frame.
+				if eventBuf.Len() > 0 {
+					var ev json.RawMessage
+					if err := json.Unmarshal([]byte(eventBuf.String()), &ev); err == nil {
+						eventCount++
+						log.Printf("codex: SSE event #%d received: %s", eventCount, string(ev)[:min(100, len(ev))])
+						if err := onEvent(ev); err != nil {
+							log.Printf("codex: SSE onEvent error: %v", err)
+							return err
+						}
+					} else {
+						log.Printf("codex: SSE unmarshal error: %v, data: %s", err, eventBuf.String())
+					}
+					eventBuf.Reset()
+					lastEventAt = time.Now()
+				}
+				continue
+			}
+			if strings.HasPrefix(line, "data: ") {
+				eventBuf.WriteString(strings.TrimPrefix(line, "data: "))
+			}
+			// Skip "event:", "id:", and ":" (keepalive) lines.
+
+		case <-time.After(noProgressTimeout):
+			if eventCount > 0 {
+				log.Printf("codex: SSE no progress for %v (last event %v ago), closing stream with %d events", noProgressTimeout, time.Since(lastEventAt), eventCount)
+				return nil // treat as successful completion
+			}
+			log.Printf("codex: SSE timeout waiting for first event")
+			return fmt.Errorf("codex sse: no events received within %v", noProgressTimeout)
+		}
+	}
+}
+
+// buildBridgeRequest marshals the TurnRequest into the JSON shape the
+// Python bridge expects. Shared between RunTurn (batch) and RunTurnStream
+// (SSE) so the request payload is identical regardless of streaming mode.
+func (c *CodexClient) buildBridgeRequest(req TurnRequest) codexBridgeTurnRequest {
+	agentRaw, err := json.Marshal(req.Agent)
+	if err != nil {
+		log.Printf("codex marshal agent: %v", err)
+		agentRaw = json.RawMessage("{}")
+	}
+	eventsRaw, err := json.Marshal(req.Events)
+	if err != nil {
+		log.Printf("codex marshal events: %v", err)
+		eventsRaw = json.RawMessage("[]")
+	}
+	var skillsRaw json.RawMessage
+	if len(req.Skills) > 0 {
+		skillsRaw, _ = json.Marshal(req.Skills)
+	}
+	var subAgentsRaw json.RawMessage
+	if len(req.SubAgents) > 0 {
+		subAgentsRaw, _ = json.Marshal(req.SubAgents)
+	}
+	return codexBridgeTurnRequest{
+		SessionID: req.SessionID,
+		Agent:     agentRaw,
+		Events:    eventsRaw,
+		Skills:    skillsRaw,
+		SubAgents: subAgentsRaw,
+	}
+}
+
+// fallbackBatchStream calls the regular /codex/turn endpoint and iterates
+// events after the turn completes. Used when the bridge is too old to
+// support /codex/turn/sse.
+func (c *CodexClient) fallbackBatchStream(
+	ctx context.Context,
+	body []byte,
+	onEvent EventHandler,
+) error {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BridgeURL+"/codex/turn", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("codex build fallback request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient().Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("codex bridge fallback: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("codex read fallback body: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("codex bridge fallback status=%d: %s", resp.StatusCode, string(respBody))
+	}
+	var out codexBridgeTurnResponse
+	if err := json.Unmarshal(respBody, &out); err != nil {
+		return fmt.Errorf("codex decode fallback: %w", err)
+	}
+	for _, ev := range out.Events {
 		if err := onEvent(ev); err != nil {
 			return err
 		}
