@@ -19,6 +19,8 @@ import { toast } from "sonner";
 import type { Event } from "../../lib/events";
 import { pairSessionErrors, pairToolResults } from "../../lib/tool-pairing";
 import { cn } from "../../lib/utils";
+import { Markdown } from "../../components/Markdown";
+import { CodeBlock } from "../../components/ai-elements/code-block";
 import {
   PromptInput,
   PromptInputActionMenu,
@@ -55,9 +57,9 @@ export interface TranscriptTabProps {
   sessionId?: string;
 
   /** Streaming overlays — rendered only in Transcript tab */
-  streams?: Map<string, Event>;
-  thinkingStreams?: Map<string, Event>;
-  toolInputStreams?: Map<string, Event>;
+  streams?: Map<string, string>;
+  thinkingStreams?: Map<string, string>;
+  toolInputStreams?: Map<string, { name?: string; partial: string }>;
 }
 
 const CATEGORY_LABELS: Record<TranscriptCategory, string> = {
@@ -100,6 +102,10 @@ export function TranscriptTab({
   sending = false,
   sessionId,
 
+  streams,
+  thinkingStreams,
+  toolInputStreams,
+
 }: TranscriptTabProps) {
   const [selectedCategories, setSelectedCategories] = useState<Set<TranscriptCategory>>(
     new Set(["user", "agent", "tool", "error", "message", "auxiliary"])
@@ -140,10 +146,17 @@ export function TranscriptTab({
       }
       // Skip status events
       if (e.type.startsWith("session.status_")) return false;
+      // Skip events currently shown in streaming overlays to avoid duplication.
+      // The streaming overlay will show the growing content with animation;
+      // once the turn ends (streams cleared), the merged event row takes over.
+      if (e.type === "agent.message" && e.id && streams?.has(e.id)) return false;
+      if (e.type === "agent.thinking" && e.id && thinkingStreams?.has(e.id)) return false;
+      if ((e.type === "agent.tool_use" || e.type === "agent.mcp_tool_use" || e.type === "agent.custom_tool_use")
+        && e.id && toolInputStreams?.has(e.id)) return false;
       // Filter by category
       return selectedCategories.has(categorizeEvent(e));
     });
-  }, [filteredEvents, selectedCategories, pairedResultIds]);
+  }, [filteredEvents, selectedCategories, pairedResultIds, streams, thinkingStreams, toolInputStreams]);
 
   // Merge consecutive agent.message events
   const displayEvents = useMemo(
@@ -197,7 +210,7 @@ export function TranscriptTab({
 
         {/* Event list */}
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
-          {displayEvents.length === 0 ? (
+          {displayEvents.length === 0 && !streams?.size && !thinkingStreams?.size && !toolInputStreams?.size ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               No events
             </div>
@@ -225,6 +238,55 @@ export function TranscriptTab({
                   </div>
                 );
               })}
+              {/* Streaming overlays — show in-flight content with animations */}
+              {thinkingStreams && Array.from(thinkingStreams.entries()).map(([tid, text]) => (
+                <div
+                  key={`think-stream-${tid}`}
+                  className={cn("rounded-md p-2", CATEGORY_BG.agent)}
+                >
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                    <span className="inline-block h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+                    <span className="font-medium uppercase tracking-wide">Thinking…</span>
+                  </div>
+                  <div className="text-sm text-foreground/80 whitespace-pre-wrap">
+                    {text}
+                    <span className="inline-block w-1.5 h-3.5 bg-fg-subtle/50 align-middle ml-0.5 animate-pulse" />
+                  </div>
+                </div>
+              ))}
+              {toolInputStreams && Array.from(toolInputStreams.entries()).map(([tid, { name, partial }]) => (
+                <div
+                  key={`tool-stream-${tid}`}
+                  className={cn("rounded-md p-2", CATEGORY_BG.tool)}
+                >
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                    <span className="inline-block h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+                    <span className="font-medium uppercase tracking-wide">
+                      {name ?? "Tool"} — streaming input…
+                    </span>
+                  </div>
+                  {partial && (
+                    <div className="rounded-md bg-muted/50 p-1">
+                      <CodeBlock code={partial} language="json" />
+                    </div>
+                  )}
+                </div>
+              ))}
+              {streams && Array.from(streams.entries()).map(([mid, text]) => (
+                <div
+                  key={`stream-${mid}`}
+                  className={cn("rounded-md p-2", CATEGORY_BG.agent)}
+                >
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                    <span className="inline-block h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+                    <span className="font-medium uppercase tracking-wide">Assistant</span>
+                  </div>
+                  <div className="text-sm text-foreground">
+                    <Markdown>{text}</Markdown>
+                    <span className="inline-block w-1.5 h-3.5 bg-fg-subtle/50 align-middle ml-0.5 animate-pulse" />
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>

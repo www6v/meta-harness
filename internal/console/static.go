@@ -54,9 +54,12 @@ func NewStaticHandler(root string) http.Handler {
 
 		// Content-hashed Vite assets can be cached aggressively; the shell
 		// (index.html) above stays no-cache so clients discover new hashes.
+		// During development the hash may not change between rebuilds, so we
+		// use a short max-age and omit "immutable" to let the browser
+		// revalidate and pick up fresh content.
 		if strings.HasPrefix(clean, "assets"+string(os.PathSeparator)) ||
 			strings.HasPrefix(clean, "assets/") {
-			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			w.Header().Set("Cache-Control", "public, max-age=0, must-revalidate")
 		}
 		http.ServeFile(w, r, full)
 	})

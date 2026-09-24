@@ -204,6 +204,12 @@ export function SessionDetail() {
   // later reconstruct the full response.
   const idSeqMap = useRef(new Set<string>());
   const abortRef = useRef<AbortController | null>(null);
+  // Watchdog: timestamp of the last SSE event received. If the session is
+  // "running" but no events arrive for 60s, we poll the session status
+  // directly and auto-recover to idle if the backend has moved on. This
+  // is a safety net for the case where the Hub drops session.status_idle
+  // (non-blocking publish with a full subscriber buffer).
+  const lastEventAtRef = useRef<number>(Date.now());
 
   // Dedup key for SSE re-delivery + initial-fetch overlap. `id` is stamped
   // on every event by the server (sevt-* for tool_results / stream events;
@@ -245,6 +251,7 @@ export function SessionDetail() {
 
   const addEvent = (e: Record<string, unknown>) => {
     const ev = e as Event;
+    lastEventAtRef.current = Date.now();
 
     // Streaming chunk lifecycle. None of these go into the events list
     // (would pollute history once the canonical agent.message lands);
@@ -333,32 +340,47 @@ export function SessionDetail() {
     }
     if (ev.type === "agent.tool_use_input_stream_end") return;
 
-    // Canonical agent.message lands → drop the in-flight render so
-    // we don't double-show the same content.
+    // Canonical agent.message lands → update the in-flight stream render
+    // so the user sees a streaming cursor while the response is growing.
+    // Harness clients emit cumulative agent.message events (same message_id,
+    // growing content) rather than dedicated *_chunk events, so we adapt
+    // here: populate the streams Map to drive the cursor animation, and
+    // only clear it when the turn ends (session.status_idle).
     if (ev.type === "agent.message" && ev.message_id) {
       const mid = ev.message_id;
+      // Extract the full text content from this cumulative event.
+      const content = ev.content as Array<{ type: string; text?: string }> | undefined;
+      const fullText = content
+        ?.filter((b) => b.type === "text")
+        .map((b) => b.text ?? "")
+        .join("") ?? "";
       setStreams((prev) => {
-        if (!prev.has(mid)) return prev;
         const next = new Map(prev);
-        next.delete(mid);
+        next.set(mid, fullText);
         return next;
       });
     }
 
-    // Canonical agent.thinking → drop the in-flight reasoning entry.
-    // If the canonical event has thinking_id we use it; otherwise we
-    // bail-clear all live thinking streams (multi-stream-per-step is
-    // rare and safer to err on closing them all).
+    // Canonical agent.thinking → update the in-flight thinking stream
+    // render so the user sees the shimmering animation while reasoning
+    // is accumulating. Harness clients emit cumulative agent.thinking
+    // events (same id/thinking_id, growing content).
     if (ev.type === "agent.thinking") {
-      const tid = typeof ev.thinking_id === "string" ? ev.thinking_id : undefined;
-      setThinkingStreams((prev) => {
-        if (prev.size === 0) return prev;
-        if (tid && !prev.has(tid)) return prev;
-        const next = new Map(prev);
-        if (tid) next.delete(tid);
-        else next.clear();
-        return next;
-      });
+      const tid = typeof ev.thinking_id === "string"
+        ? ev.thinking_id
+        : typeof ev.id === "string" ? ev.id : undefined;
+      if (tid) {
+        const content = ev.content as Array<{ type: string; text?: string }> | undefined;
+        const fullText = content
+          ?.filter((b) => b.type === "text")
+          .map((b) => b.text ?? "")
+          .join("") ?? "";
+        setThinkingStreams((prev) => {
+          const next = new Map(prev);
+          next.set(tid, fullText);
+          return next;
+        });
+      }
     }
 
     // Canonical tool_use of any kind (built-in, MCP, custom) → drop
@@ -402,6 +424,11 @@ export function SessionDetail() {
     if (ev.type === "session.status_running") setStatus("running");
     if (ev.type === "session.status_idle") {
       setStatus("idle");
+      // Clear all in-flight streaming renders — the canonical events
+      // are now in the events list and show the final content.
+      setStreams(new Map());
+      setThinkingStreams(new Map());
+      setToolInputStreams(new Map());
       const stopReason = parseStopReason(
         (ev as { stop_reason?: unknown }).stop_reason
         ?? (ev.data as { stop_reason?: unknown } | undefined)?.stop_reason,
@@ -870,6 +897,30 @@ export function SessionDetail() {
     return () => { abort.abort(); };
   }, [id]);
 
+  // Watchdog: if the session is "running" but no SSE events arrive for
+  // 30 seconds, poll the backend for the real status and auto-recover
+  // to "idle" if the turn already ended. This is a safety net for the
+  // case where the Hub's non-blocking publish drops session.status_idle
+  // (subscriber channel overflow during a fast event burst).
+  useEffect(() => {
+    if (!id || status !== "running") return;
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - lastEventAtRef.current;
+      if (elapsed < 30_000) return; // events still flowing, no need to poll
+      api<{ status: string }>(`/v1/sessions/${id}`)
+        .then((sess) => {
+          if (sess.status === "idle") {
+            setStatus("idle");
+            setStreams(new Map());
+            setThinkingStreams(new Map());
+            setToolInputStreams(new Map());
+          }
+        })
+        .catch(() => {/* poll failure — ignore, retry next tick */});
+    }, 10_000); // check every 10s
+    return () => clearInterval(interval);
+  }, [id, status, api]);
+
   // Encode a File as base64 (no data: URL prefix) for inline content
   // blocks. Used so OMA backend's userContentToParts can forward the
   // bytes straight to the AI SDK (image vision / PDF parsing) without
@@ -1282,6 +1333,9 @@ export function SessionDetail() {
           onSend={(text, files) => void send(text, files)}
           sending={sending}
           sessionId={id}
+          streams={streams}
+          thinkingStreams={thinkingStreams}
+          toolInputStreams={toolInputStreams}
         />
       ) : view === "debug" ? (
         <DebugTab

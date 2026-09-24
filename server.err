@@ -1,0 +1,30 @@
+2026-09-24 23:12:19,108 INFO codex.bridge: codex bridge starting on 127.0.0.1:8092
+2026-09-24 23:12:19,110 INFO codex.bridge: codex ws_url=ws://124.221.28.203:8765 ssh_host=(direct) remote_port=8765
+2026/09/24 23:12:24 sandbox provider=local
+2026/09/24 23:12:24 wakeup worker enabled (interval=5s)
+2026/09/24 23:12:24 eval worker enabled (interval=30s)
+2026/09/24 23:12:24 dream worker enabled (interval=30s)
+2026/09/24 23:12:24 memory retention worker enabled (daily 03:00 UTC)
+2026/09/24 23:12:24 [DSH AUTH] loading credentials from C:\Users\Wei.Wang\.dsh\.credentials.yaml for authority 127.0.0.1:3080
+2026/09/24 23:12:24 [DSH AUTH] successfully loaded auth cookie: name=dsh-auth-VPhEEcLKeqRDBoBalzN2Nm7CnfxKhLE00pKIDWxt1sw, value_length=171
+2026/09/24 23:12:24 [DSH PROXY] loaded auth cookie for authority 127.0.0.1:3080 (name=dsh-auth-VPhEEcLKeqRDBoBalzN2Nm7CnfxKhLE00pKIDWxt1sw)
+2026/09/24 23:12:24 oma-server listening on :8787
+2026/09/24 23:12:24 console UI mounted from C:\mine\workspacePy\meta-harness\meta-harness\console\dist (auth_disabled=false upstream=http://127.0.0.1:8788)
+2026/09/24 23:12:24 outbound proxy stopped: listen tcp :8790: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.
+2026/09/24 23:12:24 listen tcp :8787: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.
+exit status 1
+2026-09-24 23:13:11,593 INFO codex.bridge: codex.bridge "POST /codex/turn/sse HTTP/1.1" 200 -
+2026-09-24 23:13:11,596 INFO codex.bridge: codex pool switched to session=sess-72m77549aa10majv
+2026-09-24 23:13:11,596 INFO codex.client: codex connecting to ws://124.221.28.203:8765
+2026-09-24 23:13:11,665 INFO codex.client: codex initialized: codexHome=/home/codex/.codex
+2026-09-24 23:13:11,737 INFO codex.client: codex thread started id=01a0d3fa-4e2b-76c3-81f2-ea558905a1ac
+2026-09-24 23:13:11,816 INFO codex.client: codex fs/writeFile success path=/home/codex/.codex/skills/find-skills/SKILL.md size=7296
+2026-09-24 23:13:11,817 INFO codex.client: codex mounted 1 skill files session=sess-72m77549aa10majv
+2026-09-24 23:13:12,587 INFO codex.client: codex turn started session=sess-72m77549aa10majv thread=01a0d3fa-4e2b-76c3-81f2-ea558905a1ac
+2026-09-24 23:13:22,096 INFO codex.client: codex turn done session=sess-72m77549aa10majv state=completed chars=452 reasoning=889 duration_ms=10278 events=106 sub_agents=0
+2026-09-24 23:13:22,101 INFO codex.bridge: codex: sending poison pill to queue session=sess-72m77549aa10majv
+2026-09-24 23:13:22,101 INFO codex.bridge: codex: received poison pill, closing SSE stream session=sess-72m77549aa10majv
+2026-09-24 23:26:42,881 INFO codex.bridge: codex.bridge "GET / HTTP/1.1" 404 -
+2026-09-24 23:27:48,418 INFO codex.bridge: codex.bridge "POST /v1/sessions HTTP/1.1" 404 -
+2026-09-24 23:28:12,142 INFO codex.bridge: codex.bridge "GET /v1/sessions/sess-72m77549aa10majv HTTP/1.1" 404 -
+2026-09-24 23:28:36,114 INFO codex.bridge: codex.bridge "GET /v1/sessions/sess-72m77549aa10majv HTTP/1.1" 404 -
