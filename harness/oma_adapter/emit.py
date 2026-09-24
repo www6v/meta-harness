@@ -138,6 +138,15 @@ def emit_oma_events(
                     # No streaming happened; emit the full text once.
                     seen_agent_text.add(text)
                     out.append(_agent_message(text))
+                elif text and text not in seen_agent_text:
+                    # Safety fallback: text wasn't emitted through streaming
+                    # (e.g. length mismatch from previously stripped text).
+                    # Emit the stripped content as a final catch-up so no
+                    # text is silently dropped.
+                    stripped = text.strip()
+                    if stripped and stripped not in seen_agent_text:
+                        seen_agent_text.add(stripped)
+                        out.append(_agent_message(stripped))
                 if text:
                     seen_agent_text.add(text)
                 usage_span = _model_usage_span(message)
@@ -440,7 +449,7 @@ def _usage_int(usage: dict[str, Any], *keys: str) -> int:
 def _extract_pi_message_text(message: dict[str, Any]) -> str:
     content = message.get("content")
     if isinstance(content, str):
-        return content.strip()
+        return content
     if not isinstance(content, list):
         return ""
     parts: list[str] = []
@@ -449,7 +458,7 @@ def _extract_pi_message_text(message: dict[str, Any]) -> str:
             continue
         if block.get("type") == "text" and block.get("text"):
             parts.append(str(block["text"]))
-    return "".join(parts).strip()
+    return "".join(parts)
 
 
 def _extract_text(item: dict[str, Any]) -> str:

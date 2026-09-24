@@ -144,11 +144,22 @@ export type DisplayEvent = {
 export function mergeConsecutiveAgentEvents(events: Event[]): DisplayEvent[] {
   const result: DisplayEvent[] = [];
   let currentGroup: Event[] = [];
+  let currentType: string | null = null;
 
   for (const e of events) {
     const category = categorizeEvent(e);
 
-    if (category === "agent" && e.type === "agent.message") {
+    // Group consecutive events of the same type within the agent category.
+    // Both agent.message and agent.thinking use cumulative streaming (same
+    // `id`, increasing `seq`, growing content). Without merging, every
+    // cumulative update renders as a separate row — "大量重复的内容".
+    // We keep thinking and message in separate groups so the "Thinking:"
+    // prefix stays distinct from the final reply.
+    const isMergeable =
+      category === "agent"
+      && (e.type === "agent.message" || e.type === "agent.thinking");
+
+    if (isMergeable && e.type === currentType) {
       currentGroup.push(e);
     } else {
       if (currentGroup.length > 0) {
@@ -159,7 +170,13 @@ export function mergeConsecutiveAgentEvents(events: Event[]): DisplayEvent[] {
         });
         currentGroup = [];
       }
-      result.push({ events: [e], category, primaryEvent: e });
+      if (isMergeable) {
+        currentGroup = [e];
+        currentType = e.type;
+      } else {
+        currentType = null;
+        result.push({ events: [e], category, primaryEvent: e });
+      }
     }
   }
 
@@ -211,8 +228,13 @@ export function getMergedEventText(events: Event[]): string {
     return texts[texts.length - 1];
   }
 
-  // Delta streaming — concatenate all fragments.
-  return texts.join("");
+  // Not cumulative: for thinking events each is a complete rewrite of the
+  // reasoning so far, and for message events the harness always sends
+  // cumulative (prefix-growing) content in practice.  Using the last
+  // event's text is correct for both cases — joining would duplicate
+  // rewritten thinking, and delta concatenation never occurs from the
+  // harness.
+  return texts[texts.length - 1];
 }
 
 function extractEventText(e: Event): string {
@@ -231,29 +253,17 @@ function getEventSnippet(event: Event): string {
 
   // DeepSeek harness events
   if (type === "user/message" || type === "user.message") {
-    const text = Array.isArray(event.content)
-      ? event.content[0]?.text ?? ""
-      : typeof event.content === "string"
-        ? event.content
-        : "";
+    const text = extractEventText(event);
     return text.slice(0, 50) + (text.length > 50 ? "…" : "");
   }
 
   if (type === "assistant/message" || type === "agent.message") {
-    const text = Array.isArray(event.content)
-      ? event.content[0]?.text ?? ""
-      : typeof event.content === "string"
-        ? event.content
-        : "";
+    const text = extractEventText(event);
     return text.slice(0, 50) + (text.length > 50 ? "…" : "");
   }
 
   if (type === "system/message") {
-    const text = Array.isArray(event.content)
-      ? event.content[0]?.text ?? ""
-      : typeof event.content === "string"
-        ? event.content
-        : "";
+    const text = extractEventText(event);
     return `System: ${text.slice(0, 40)}${text.length > 40 ? "…" : ""}`;
   }
 
@@ -273,30 +283,18 @@ function getEventSnippet(event: Event): string {
   // Standard OMA events
   switch (type) {
     case "user.message": {
-      const text = Array.isArray(event.content)
-        ? event.content[0]?.text ?? ""
-        : typeof event.content === "string"
-          ? event.content
-          : "";
+      const text = extractEventText(event);
       return text.slice(0, 50) + (text.length > 50 ? "…" : "");
     }
     case "agent.message": {
-      const text = Array.isArray(event.content)
-        ? event.content[0]?.text ?? ""
-        : typeof event.content === "string"
-          ? event.content
-          : "";
+      const text = extractEventText(event);
       return text.slice(0, 50) + (text.length > 50 ? "…" : "");
     }
     case "agent.thinking": {
       const text =
         typeof (event as { text?: unknown }).text === "string"
           ? (event as { text: string }).text
-          : Array.isArray(event.content)
-            ? event.content[0]?.text ?? ""
-            : typeof event.content === "string"
-              ? event.content
-              : "";
+          : extractEventText(event);
       return `Thinking: ${text.slice(0, 40)}${text.length > 40 ? "…" : ""}`;
     }
     case "agent.tool_use":

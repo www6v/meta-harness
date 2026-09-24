@@ -38,17 +38,20 @@ type CodexClient struct {
 
 // codexBridgeTurnRequest is the JSON body POSTed to the bridge.
 // We only forward the fields the bridge actually reads
-// (session_id, agent.system_prompt / system, events, skills) —
+// (session_id, agent.system_prompt / system, events, skills, sub_agents) —
 // everything else is dropped. The bridge pulls the latest user.message
 // text from events and feeds it to codex. Skills are resolved by the
 // ResourceResolver into AMA-shaped payloads (with system_prompt_addition
 // + files) — the bridge writes them into the codex workspace and
-// injects their prompt additions into the turn instructions.
+// injects their prompt additions into the turn instructions. Sub-agents
+// are the resolved callable agent snapshots; the bridge describes them
+// to the codex model so it can decide when to spawn them.
 type codexBridgeTurnRequest struct {
 	SessionID string          `json:"session_id"`
 	Agent     json.RawMessage `json:"agent,omitempty"`
 	Events    json.RawMessage `json:"events,omitempty"`
 	Skills    json.RawMessage `json:"skills,omitempty"`
+	SubAgents json.RawMessage `json:"sub_agents,omitempty"`
 }
 
 // codexBridgeTurnResponse is the JSON body returned by the bridge.
@@ -104,11 +107,19 @@ func (c *CodexClient) RunTurn(
 			return TurnResponse{}, fmt.Errorf("codex marshal skills: %w", err)
 		}
 	}
+	var subAgentsRaw json.RawMessage
+	if len(req.SubAgents) > 0 {
+		subAgentsRaw, err = json.Marshal(req.SubAgents)
+		if err != nil {
+			return TurnResponse{}, fmt.Errorf("codex marshal sub_agents: %w", err)
+		}
+	}
 	body, err := json.Marshal(codexBridgeTurnRequest{
 		SessionID: req.SessionID,
 		Agent:     agentRaw,
 		Events:    eventsRaw,
 		Skills:    skillsRaw,
+		SubAgents: subAgentsRaw,
 	})
 	if err != nil {
 		return TurnResponse{}, fmt.Errorf("codex marshal body: %w", err)

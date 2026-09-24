@@ -194,6 +194,15 @@ export function SessionDetail() {
   >({});
   const [showTrajectory, setShowTrajectory] = useState(false);
   const seenKeys = useRef(new Set<string>());
+  // Tracks seen (id, seq) pairs for cumulative streaming events that
+  // share the same `id` but arrive with increasing `seq` and growing
+  // content.  `eventKey` deduplicates by `id` alone, so without this
+  // the 2nd+ cumulative event is silently dropped — only the shortest
+  // prefix survives, producing the "让我" truncation.  Keyed by
+  // `id:seq` so each cumulative update is stored separately, and the
+  // Transcript tab's mergeConsecutiveAgentEvents + getMergedEventText
+  // later reconstruct the full response.
+  const idSeqMap = useRef(new Set<string>());
   const abortRef = useRef<AbortController | null>(null);
 
   // Dedup key for SSE re-delivery + initial-fetch overlap. `id` is stamped
@@ -367,9 +376,28 @@ export function SessionDetail() {
       });
     }
 
-    const key = eventKey(ev);
-    if (seenKeys.current.has(key)) return;
-    seenKeys.current.add(key);
+    const id = (ev as { id?: string }).id;
+    const seq = (ev as { seq?: number }).seq ?? 0;
+    // Cumulative streaming events share the same `id` but arrive with
+    // increasing `seq` and growing content.  The `eventKey` dedup below
+    // uses `id` alone, so without a separate (id,seq) tracker the 2nd+
+    // cumulative update is silently dropped — only the shortest prefix
+    // survives, producing the "让我" truncation.
+    // Key each event by `id:seq` so every cumulative update is stored
+    // separately; mergeConsecutiveAgentEvents + getMergedEventText later
+    // reconstruct the full response from all fragments.
+    if (id) {
+      const idSeqKey = `${id}:${seq}`;
+      if (idSeqMap.current.has(idSeqKey)) return;
+      idSeqMap.current.add(idSeqKey);
+      // id-tracked event: idSeqMap is the authoritative dedup (keyed by
+      // id:seq).  Skip the legacy seenKeys check — eventKey uses `id`
+      // alone, so it would block every cumulative update after the first.
+    } else {
+      const key = eventKey(ev);
+      if (seenKeys.current.has(key)) return;
+      seenKeys.current.add(key);
+    }
 
     if (ev.type === "session.status_running") setStatus("running");
     if (ev.type === "session.status_idle") {
@@ -642,6 +670,7 @@ export function SessionDetail() {
     // URL until the SSE refill catches up. Hard refresh works because
     // it re-mounts the whole tree from a fresh state. Reported 2026-05-13.
     seenKeys.current.clear();
+    idSeqMap.current.clear();
     setEvents([]);
     setStreams(new Map());
     setThinkingStreams(new Map());
@@ -1296,6 +1325,35 @@ export function SessionDetail() {
                   }
                   return tid === activeThreadId;
                 });
+                // Dedup cumulative streaming events for the chat view.
+                // Consecutive events sharing the same `id` are cumulative
+                // updates (prefix-growing content).  Keeping only the last
+                // per group gives the full text without showing N duplicate
+                // bubbles.  Thinking and message events are grouped
+                // separately so "Thinking: …" rows stay distinct from the
+                // final reply bubble.
+                const chatDeduped = (() => {
+                  const out: Event[] = [];
+                  let prevId: string | undefined;
+                  let prevType: string | undefined;
+                  for (const e of filtered) {
+                    const eid = (e as { id?: string }).id;
+                    if (
+                      eid
+                      && eid === prevId
+                      && e.type === prevType
+                      && out.length > 0
+                    ) {
+                      // Replace previous with this cumulative update.
+                      out[out.length - 1] = e;
+                    } else {
+                      out.push(e);
+                    }
+                    prevId = eid;
+                    prevType = e.type;
+                  }
+                  return out;
+                })();
                 // Pre-pair tool_use ↔ result events. Three flavors per the
                 // wire spec emitted in default-loop.ts:emitToolCallEvent /
                 // emitToolResultEvent:
@@ -1305,7 +1363,7 @@ export function SessionDetail() {
                 // The previous pairing only covered builtin → custom tools
                 // (e.g. general_subagent) showed their result as an "unpaired"
                 // orphan block because the use side was custom_tool_use.
-                const { resultByToolUseId } = pairToolResults(filtered);
+                const { resultByToolUseId } = pairToolResults(chatDeduped);
                 // session.error → upstream model_request_end error_message
                 // map. session.error's payload from SSE only carries the
                 // generic "No output generated. Check the stream for errors."
@@ -1317,9 +1375,9 @@ export function SessionDetail() {
                 // with finish_reason!=error (succeeded → previous failure is
                 // no longer the immediate cause). Keyed by stable event id
                 // so EventRender can look it up at render time.
-                const sessionErrorCause = pairSessionErrors(filtered);
+                const sessionErrorCause = pairSessionErrors(chatDeduped);
                 const pairedResultIds = new Set<string>();
-                return filtered.map((e, i) => {
+                return chatDeduped.map((e, i) => {
                   // Stable React key — `e.id` (sevt_*) lives on every event
                   // server-side via the stamp callback in session-do.ts, so
                   // SSE-arrived rows already have it. Fall back to seq for
@@ -1904,7 +1962,11 @@ function EventRender({
       // is the contract: see apps/agent/src/runtime/session-do.ts:onScheduledWakeup.
       const metadata = (event as { metadata?: { harness?: string; kind?: string; scheduled_at?: string } }).metadata;
       const isWakeup = metadata?.harness === "schedule" && metadata?.kind === "wakeup";
-      const text = Array.isArray(event.content) ? event.content[0]?.text ?? "" : "";
+      const text = Array.isArray(event.content)
+        ? event.content.map((b) => b.text).join("")
+        : typeof event.content === "string"
+          ? event.content
+          : "";
 
       if (isWakeup) {
         // System-origin: left-aligned via from="system" (Message only
