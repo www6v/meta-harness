@@ -62,6 +62,33 @@ services:
           memory: 512M
           cpus: "0.5"
 
+  codex-bridge:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.codex-bridge
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        APT_MIRROR: ${APT_MIRROR:-mirrors.aliyun.com}
+    env_file:
+      - ../.env
+    environment:
+      CODEX_LISTEN: "0.0.0.0:8092"
+      CODEX_WS_URL: "ws://124.221.28.203:8765"
+      CODEX_WS_TOKEN: "${CODEX_WS_TOKEN:-codex-poc-token-2024}"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    networks:
+      - default
+
   meta-harness:
     build:
       context: ..
@@ -97,6 +124,8 @@ services:
       CONSOLE_DIR: /app/console
       AUTH_UPSTREAM_URL: http://oma-auth:8788
       DSH_HOME: /root/.dsh
+      # Codex bridge: the Python HTTP→WS bridge is a sibling container.
+      OMA_CODEX_BRIDGE_URL: http://codex-bridge:8092
     volumes:
       - ../data:/data
       - /root/.dsh:/root/.dsh:ro
@@ -110,6 +139,8 @@ services:
           memory: 512M
     depends_on:
       oma-auth:
+        condition: service_healthy
+      codex-bridge:
         condition: service_healthy
       # oma-harness-lb:
       #   condition: service_started

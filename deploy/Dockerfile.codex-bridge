@@ -1,0 +1,31 @@
+# syntax=docker/dockerfile:1
+
+# Codex bridge: Python HTTP→WebSocket bridge for the Go CodexClient.
+# Listens on :8092, proxies POST /codex/turn to the codex app-server
+# WebSocket (CODEX_WS_URL).
+
+FROM python:3.12-slim
+
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG APT_MIRROR=mirrors.aliyun.com
+
+RUN sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" \
+      /etc/apt/sources.list.d/debian.sources \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app/bridge
+
+# Install websockets (for codex WS client) and paramiko (for optional SSH tunnel)
+RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" websockets paramiko
+
+# Copy the bridge code from meta-harness-ext/ssh
+COPY meta-harness-ext/ssh/ ./
+
+# Listen on all interfaces so the Go container can reach us
+ENV CODEX_LISTEN=0.0.0.0:8092
+
+EXPOSE 8092
+
+CMD ["python", "codex_bridge.py"]
