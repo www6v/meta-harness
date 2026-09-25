@@ -38,19 +38,11 @@ import {
 import {
   categorizeEvent,
   EventRow,
+  getConsecutiveEventText,
   getMergedEventText,
   mergeConsecutiveAgentEvents,
   type TranscriptCategory,
 } from "./EventRow";
-
-/** Extract full text from an agent.message event. */
-function extractAgentText(e: Event): string {
-  return Array.isArray(e.content)
-    ? e.content.map((b: { text?: string }) => b.text ?? "").join("")
-    : typeof e.content === "string"
-      ? e.content
-      : "";
-}
 
 export interface TranscriptTabProps {
   events: Event[];
@@ -163,31 +155,6 @@ export function TranscriptTab({
     ) ?? null;
   }, [displayEvents, selectedEventId]);
 
-  // For each agent.message message_id, find the longest text among all
-  // events sharing that id.  Cumulative streaming events share the same
-  // `message_id` but grow in text length.  If a non-agent event (e.g.
-  // session.status_running) breaks the consecutive run, the merge logic
-  // creates separate groups — clicking a single-event group would show
-  // only that event's truncated text in the detail pane.  This map lets
-  // EventDetail always render the full content regardless of grouping.
-  const agentMessageLongestText = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const e of visibleEvents) {
-      if (e.type !== "agent.message") continue;
-      const mid = typeof e.message_id === "string" ? e.message_id : undefined;
-      if (!mid) continue;
-      const text = Array.isArray(e.content)
-        ? e.content.map((b: { text?: string }) => b.text ?? "").join("")
-        : typeof e.content === "string"
-          ? e.content
-          : "";
-      if (text.length > (map.get(mid)?.length ?? 0)) {
-        map.set(mid, text);
-      }
-    }
-    return map;
-  }, [visibleEvents]);
-
   // For merged groups: compute the full text from all events in the group.
   // Handles both cumulative (prefix-growing) and delta (fragment) streaming.
   // For delta streaming (DeepSeek / Codex harness), each event is a short
@@ -198,71 +165,7 @@ export function TranscriptTab({
   // either type should display the full concatenated text in the detail pane.
   const detailOverrideText = useMemo(() => {
     if (!selectedDisplayEvent) return undefined;
-    const isMergedGroup = selectedDisplayEvent.events.length > 1;
-    if (isMergedGroup) {
-      // Merged group: getMergedEventText handles both delta and cumulative.
-      return getMergedEventText(selectedDisplayEvent.events) || undefined;
-    }
-    // Single event: walk consecutive same-type events in visibleEvents
-    // to find the full run of delta fragments (or cumulative updates).
-    const ev = selectedDisplayEvent.primaryEvent;
-    if (ev.type !== "agent.message" && ev.type !== "agent.thinking") return undefined;
-    const targetType = ev.type;
-    const idx = visibleEvents.findIndex((e) => e.id === ev.id);
-    if (idx < 0) return undefined;
-    // Collect all consecutive events of the same type (forward + backward).
-    const allTexts: string[] = [];
-    // Walk backward
-    for (let i = idx - 1; i >= 0; i--) {
-      const prev = visibleEvents[i];
-      if (prev.type !== targetType) break;
-      allTexts.unshift(extractAgentText(prev));
-    }
-    // Current event — use extractEventText for thinking (reads e.text fallback),
-    // extractAgentText for messages (reads e.content).
-    allTexts.push(
-      targetType === "agent.thinking"
-        ? (Array.isArray(ev.content)
-            ? ev.content.map((b: { text?: string }) => b.text ?? "").join("")
-            : typeof ev.content === "string"
-              ? ev.content
-              : typeof (ev as { text?: string }).text === "string"
-                ? (ev as { text: string }).text
-                : "")
-        : extractAgentText(ev)
-    );
-    // Walk forward
-    for (let i = idx + 1; i < visibleEvents.length; i++) {
-      const next = visibleEvents[i];
-      if (next.type !== targetType) break;
-      allTexts.push(
-        targetType === "agent.thinking"
-          ? (Array.isArray(next.content)
-              ? next.content.map((b: { text?: string }) => b.text ?? "").join("")
-              : typeof next.content === "string"
-                ? next.content
-                : typeof (next as { text?: string }).text === "string"
-                  ? (next as { text: string }).text
-                  : "")
-          : extractAgentText(next)
-      );
-    }
-    if (allTexts.length <= 1) return allTexts[0] || undefined;
-    // Detect cumulative: if each text is a prefix of the next, it's cumulative.
-    let isCumulative = true;
-    const checkLimit = Math.min(3, allTexts.length - 1);
-    for (let i = 0; i < checkLimit; i++) {
-      if (!allTexts[i + 1].startsWith(allTexts[i])) {
-        isCumulative = false;
-        break;
-      }
-    }
-    if (isCumulative) {
-      // Cumulative: last text has the complete message.
-      return allTexts[allTexts.length - 1] || undefined;
-    }
-    // Delta: concatenate all fragments.
-    return allTexts.join("") || undefined;
+    return getConsecutiveEventText(visibleEvents, selectedDisplayEvent);
   }, [selectedDisplayEvent, visibleEvents]);
 
   const toggleCategory = (cat: TranscriptCategory) => {
@@ -426,7 +329,6 @@ export function TranscriptTab({
                     ? selectedDisplayEvent.events
                     : undefined
                 }
-                agentMessageLongestText={agentMessageLongestText}
                 overrideText={detailOverrideText}
               />
             }

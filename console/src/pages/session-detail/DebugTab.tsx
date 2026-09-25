@@ -31,6 +31,7 @@ import {
 import {
   DisplayEvent,
   EventRow,
+  getConsecutiveEventText,
   getMergedEventText,
   mergeConsecutiveAgentEvents,
 } from "./EventRow";
@@ -93,14 +94,16 @@ export function DebugTab({
   const eventRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // Filter events by active thread
-  const filteredEvents = events.filter((e) => {
-    const tid = (e as { session_thread_id?: string }).session_thread_id;
-    if (!tid) return activeThreadId === "sthr_primary";
-    return tid === activeThreadId;
-  });
+  const filteredEvents = useMemo(() => {
+    return events.filter((e) => {
+      const tid = (e as { session_thread_id?: string }).session_thread_id;
+      if (!tid) return activeThreadId === "sthr_primary";
+      return tid === activeThreadId;
+    });
+  }, [events, activeThreadId]);
 
   // Get all event types for filter
-  const eventTypes = getEventTypes(filteredEvents);
+  const eventTypes = useMemo(() => getEventTypes(filteredEvents), [filteredEvents]);
 
   const hasDefaultHidden = eventTypes.some((t) => isDefaultHiddenDebugType(t));
 
@@ -129,52 +132,9 @@ export function DebugTab({
 
   // Compute the full text for the selected event's detail pane.
   // Handles both merged groups and single events in a consecutive run.
-  // For delta streaming, concatenates all fragments.
-  // For cumulative streaming, returns the longest (last) text.
-  // Handles both agent.message and agent.thinking.
   const debugOverrideText = useMemo(() => {
     if (!selectedDisplayEvent) return undefined;
-    const mergedText = getMergedEventText(selectedDisplayEvent.events);
-    if (mergedText && selectedDisplayEvent.events.length > 1) return mergedText;
-    if (selectedDisplayEvent.events.length <= 1) {
-      const ev = selectedDisplayEvent.primaryEvent;
-      if (ev.type !== "agent.message" && ev.type !== "agent.thinking") return undefined;
-      const targetType = ev.type;
-      const idx = visibleEvents.findIndex((e) => e.id === ev.id);
-      if (idx < 0) return undefined;
-      const extractText = (e: Event): string => {
-        if (Array.isArray(e.content))
-          return e.content.map((b: { text?: string }) => b.text ?? "").join("");
-        if (typeof e.content === "string") return e.content;
-        if (typeof (e as { text?: string }).text === "string")
-          return (e as { text: string }).text;
-        return "";
-      };
-      const allTexts: string[] = [];
-      for (let i = idx - 1; i >= 0; i--) {
-        const prev = visibleEvents[i];
-        if (prev.type !== targetType) break;
-        allTexts.unshift(extractText(prev));
-      }
-      allTexts.push(extractText(ev));
-      for (let i = idx + 1; i < visibleEvents.length; i++) {
-        const next = visibleEvents[i];
-        if (next.type !== targetType) break;
-        allTexts.push(extractText(next));
-      }
-      if (allTexts.length <= 1) return allTexts[0] || undefined;
-      let isCumulative = true;
-      const checkLimit = Math.min(3, allTexts.length - 1);
-      for (let i = 0; i < checkLimit; i++) {
-        if (!allTexts[i + 1].startsWith(allTexts[i])) {
-          isCumulative = false;
-          break;
-        }
-      }
-      if (isCumulative) return allTexts[allTexts.length - 1] || undefined;
-      return allTexts.join("") || undefined;
-    }
-    return mergedText || undefined;
+    return getConsecutiveEventText(visibleEvents, selectedDisplayEvent);
   }, [selectedDisplayEvent, visibleEvents]);
 
   // Pair tool_use ↔ tool_result (bidirectional)
@@ -398,7 +358,6 @@ export function DebugTab({
                     ? selectedDisplayEvent.events
                     : undefined
                 }
-                agentMessageLongestText={new Map()}
                 overrideText={debugOverrideText}
               />
             }

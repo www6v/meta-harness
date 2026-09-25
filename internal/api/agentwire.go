@@ -216,6 +216,7 @@ func formatAPIAgentConfig(
 		"id":               cfg.ID,
 		"name":             cfg.Name,
 		"model":            formatModelObject(cfg.Model, modelSpeed),
+		"harness":          cfg.Harness,
 		"system":           nullIfEmpty(sys),
 		"description":      nullIfEmpty(cfg.Description),
 		"skills":           jsonArrayOrEmpty(cfg.Skills),

@@ -213,9 +213,9 @@ export function AppSidebar() {
             <SidebarMenu>
               {/* Quickstart (from the workflows plugin) is rendered at the
                   top of the Managed Agents section so it sits right above
-                  Agents, the first real managed entry. */}
-              {g.label === "Managed Agents" &&
-                workflowsItems.map((item) => renderItem(item as NavItem))}
+                  Agents, the first real managed entry. — Hidden on user request. */}
+              {/* {g.label === "Managed Agents" &&
+                workflowsItems.map((item) => renderItem(item as NavItem))} */}
               {g.items.map(renderItem)}
             </SidebarMenu>
           </SidebarGroup>

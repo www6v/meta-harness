@@ -151,6 +151,7 @@ export function mergeConsecutiveAgentEvents(events: Event[]): DisplayEvent[] {
   const result: DisplayEvent[] = [];
   let currentGroup: Event[] = [];
   let currentType: string | null = null;
+  const midIndexMap = new Map<string, number>();
 
   for (const e of events) {
     const category = categorizeEvent(e);
@@ -168,17 +169,17 @@ export function mergeConsecutiveAgentEvents(events: Event[]): DisplayEvent[] {
     if (isMergeable && e.type === currentType) {
       // Deduplicate by message_id: if this event shares a message_id with
       // an earlier event in the group, replace it (keep the latest text).
+      // Map tracks message_id → index for O(1) lookup instead of O(k) findIndex.
       const mid = (e as { message_id?: unknown }).message_id;
       if (typeof mid === "string" && mid.length > 0) {
-        const dupIdx = currentGroup.findIndex(
-          (ge) => (ge as { message_id?: unknown }).message_id === mid
-        );
-        if (dupIdx >= 0) {
+        const dupIdx = midIndexMap.get(mid);
+        if (dupIdx !== undefined) {
           // Replace the older duplicate with this newer, more complete event.
           currentGroup[dupIdx] = e;
           // Don't push — we replaced in-place.
           continue;
         }
+        midIndexMap.set(mid, currentGroup.length);
       }
       currentGroup.push(e);
     } else {
@@ -193,6 +194,7 @@ export function mergeConsecutiveAgentEvents(events: Event[]): DisplayEvent[] {
       if (isMergeable) {
         currentGroup = [e];
         currentType = e.type;
+        midIndexMap.clear();
       } else {
         currentType = null;
         result.push({ events: [e], category, primaryEvent: e });
@@ -256,7 +258,55 @@ export function getMergedEventText(events: Event[]): string {
   return texts.join("");
 }
 
-function extractEventText(e: Event): string {
+/**
+ * Get text from a consecutive run of same-type events surrounding the
+ * selected event. Handles both merged groups (delegates to getMergedEventText)
+ * and single events (walks backward/forward through visibleEvents to find
+ * the full run of consecutive same-type neighbors).
+ *
+ * Shared between TranscriptTab and DebugTab — replaces the duplicated
+ * detailOverrideText / debugOverrideText logic.
+ */
+export function getConsecutiveEventText(
+  visibleEvents: Event[],
+  displayEvent: DisplayEvent
+): string | undefined {
+  // Merged group: getMergedEventText handles both delta and cumulative.
+  if (displayEvent.events.length > 1) {
+    return getMergedEventText(displayEvent.events) || undefined;
+  }
+  // Single event: walk consecutive same-type events in visibleEvents.
+  const ev = displayEvent.primaryEvent;
+  if (ev.type !== "agent.message" && ev.type !== "agent.thinking") return undefined;
+  const targetType = ev.type;
+  const idx = visibleEvents.findIndex((e) => e.id === ev.id);
+  if (idx < 0) return undefined;
+  const allTexts: string[] = [];
+  for (let i = idx - 1; i >= 0; i--) {
+    if (visibleEvents[i].type !== targetType) break;
+    allTexts.unshift(extractEventText(visibleEvents[i]));
+  }
+  allTexts.push(extractEventText(ev));
+  for (let i = idx + 1; i < visibleEvents.length; i++) {
+    if (visibleEvents[i].type !== targetType) break;
+    allTexts.push(extractEventText(visibleEvents[i]));
+  }
+  if (allTexts.length <= 1) return allTexts[0] || undefined;
+  // Detect cumulative: if each text is a prefix of the next, it's cumulative.
+  // (Same algorithm as getMergedEventText — operates on pre-extracted texts.)
+  const checkLimit = Math.min(3, allTexts.length - 1);
+  let isCumulative = true;
+  for (let i = 0; i < checkLimit; i++) {
+    if (!allTexts[i + 1].startsWith(allTexts[i])) {
+      isCumulative = false;
+      break;
+    }
+  }
+  if (isCumulative) return allTexts[allTexts.length - 1] || undefined;
+  return allTexts.join("") || undefined;
+}
+
+export function extractEventText(e: Event): string {
   if (Array.isArray(e.content)) {
     return e.content.map((b) => b.text).join("");
   }

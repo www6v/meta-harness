@@ -64,7 +64,7 @@ fi
 
 CONSOLE_DIST="$(cd "$(dirname "${CONSOLE_DIST}")" && pwd)/$(basename "${CONSOLE_DIST}")"
 
-export OMA_FAKE_HARNESS="${OMA_FAKE_HARNESS:-1}"
+export OMA_FAKE_HARNESS="${OMA_FAKE_HARNESS:-0}"
 export HARNESS_URL="${HARNESS_URL:-http://127.0.0.1:8090}"
 export OMA_API_KEY="${OMA_API_KEY:-dev-key}"
 # DATABASE_PATH is legacy SQLite; prefer DATABASE_URL (MySQL) when set.

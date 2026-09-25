@@ -71,15 +71,6 @@ export interface EventDetailProps {
    */
   mergedEvents?: Event[];
   /**
-   * Pre-computed longest text for each agent.message `message_id`.
-   * Cumulative streaming events share the same `message_id` but grow
-   * in text length.  When the consecutive merge chain is broken (e.g.
-   * by a `session.status_running` event between agent messages), the
-   * detail pane would otherwise show only the clicked event's truncated
-   * text.  This map lets EventDetail always render the full content.
-   */
-  agentMessageLongestText?: Map<string, string>;
-  /**
    * Pre-computed longest text from the selected merged group (or
    * consecutive run).  When set, overrides the single-event text for
    * `agent.message` rendering so the detail pane always shows the full
@@ -95,7 +86,6 @@ export function EventDetail({
   modelErrorCause,
   onViewInDebug,
   mergedEvents,
-  agentMessageLongestText,
   overrideText,
 }: EventDetailProps) {
   // For agent.message and agent.thinking events, the transcript row may show
@@ -109,10 +99,6 @@ export function EventDetail({
   // streaming fragments — use the merged (final) text instead of the
   // primaryEvent (first, shortest fragment) so the detail pane matches
   // what the transcript row shows.
-  const allAgentMessages =
-    mergedEvents !== undefined &&
-    mergedEvents.length > 1 &&
-    mergedEvents.every((e) => e.type === "agent.message");
   const allAgentThinking =
     mergedEvents !== undefined &&
     mergedEvents.length > 1 &&

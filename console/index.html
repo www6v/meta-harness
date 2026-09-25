@@ -72,7 +72,7 @@
       (function(){
         try { if ('caches' in window) { caches.keys().then(function(names){ names.forEach(function(n){ caches.delete(n) }); }); } if ('serviceWorker' in navigator) { navigator.serviceWorker.getRegistrations().then(function(regs){ regs.forEach(function(r){ r.unregister() }) }); } } catch(e) {}
         try {
-          var DEPLOY = '20260925150000';
+          var DEPLOY = '20260925160000';
           var seen = sessionStorage.getItem('oma_deploy');
           var hasReloadFlag = /[?&]_r=/.test(location.search);
           if (seen && seen !== DEPLOY) {
@@ -93,11 +93,12 @@
          and forces a full page reload if the server has a newer DEPLOY version.
          Essential for browsers that ignore Cache-Control (e.g. WeChat). -->
     <script>
-      (function(){ var DEPLOY = '20260925150000'; function checkDeploy() { fetch('/?_cb=' + Date.now(), {cache:'no-store'}).then(function(r){ return r.text(); }).then(function(html){ var m = html.match(/DEPLOY\s*=\s*'(\d+)'/); if (m && m[1] !== DEPLOY) { sessionStorage.removeItem('oma_deploy'); var sep = location.search ? '&' : '?'; location.href = location.pathname + location.search + sep + '_r=' + Date.now(); } }).catch(function(){}); } setInterval(checkDeploy, 15000); setTimeout(checkDeploy, 3000); })();
+      (function(){ var DEPLOY = '20260925160000'; function checkDeploy() { fetch('/?_cb=' + Date.now(), {cache:'no-store'}).then(function(r){ return r.text(); }).then(function(html){ var m = html.match(/DEPLOY\s*=\s*'(\d+)'/); if (m && m[1] !== DEPLOY) { sessionStorage.removeItem('oma_deploy'); var sep = location.search ? '&' : '?'; location.href = location.pathname + location.search + sep + '_r=' + Date.now(); } }).catch(function(){}); } setInterval(checkDeploy, 15000); setTimeout(checkDeploy, 3000); })();
     </script>
   </head>
   <body class="bg-bg text-fg antialiased">
     <div id="root"></div>
+    <div id="deploy-check" style="position:fixed;bottom:4px;right:4px;font-size:10px;background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:4px;z-index:99999;pointer-events:none;font-family:monospace;border:1px solid #f59e0b">DEPLOY:20260925160000</div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
