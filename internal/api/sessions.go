@@ -566,7 +566,24 @@ func writeSSE(w http.ResponseWriter, seq int, payload json.RawMessage) {
 		fmt.Fprintf(w, "event: %s\n", meta.Type)
 	}
 	fmt.Fprintf(w, "id: %d\n", seq)
-	fmt.Fprintf(w, "data: %s\n\n", payload)
+	// Inject the sequence number into the data JSON so SSE clients can
+	// deduplicate cumulative streaming events (same `id`, growing `seq`).
+	// Without this, the frontend sees seq=0 for all SSE events and drops
+	// all but the first cumulative update — producing the "让我" /
+	// "北京目前有 **" truncation bug.  We inject via string surgery
+	// (no JSON round-trip) for zero per-event allocation overhead.
+	// Field name is `seq` (not `_seq`) — the frontend's addEvent already
+	// reads `ev.seq` for dedup, and the inner event payload from the
+	// store never carries `seq` (it lives on the REST API wrapper only).
+	if len(payload) > 0 && payload[0] == '{' {
+		injected := make([]byte, 0, len(payload)+32)
+		injected = append(injected, '{')
+		injected = append(injected, fmt.Sprintf(`"seq":%d,`, seq)...)
+		injected = append(injected, payload[1:]...)
+		fmt.Fprintf(w, "data: %s\n\n", injected)
+	} else {
+		fmt.Fprintf(w, "data: %s\n\n", payload)
+	}
 }
 
 func parseAfterSeq(req *http.Request) int {

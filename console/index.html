@@ -67,6 +67,34 @@
         document.documentElement.classList.add("dark");
       }
     </script>
+    <!-- Cache-busting: clear caches, unregister SWs, force-reload on version mismatch -->
+    <script>
+      (function(){
+        try { if ('caches' in window) { caches.keys().then(function(names){ names.forEach(function(n){ caches.delete(n) }); }); } if ('serviceWorker' in navigator) { navigator.serviceWorker.getRegistrations().then(function(regs){ regs.forEach(function(r){ r.unregister() }) }); } } catch(e) {}
+        try {
+          var DEPLOY = '20260925150000';
+          var seen = sessionStorage.getItem('oma_deploy');
+          var hasReloadFlag = /[?&]_r=/.test(location.search);
+          if (seen && seen !== DEPLOY) {
+            sessionStorage.removeItem('oma_deploy');
+            var sep = location.search ? '&' : '?';
+            location.href = location.pathname + location.search + sep + '_r=' + Date.now();
+          } else if (!seen) {
+            sessionStorage.setItem('oma_deploy', DEPLOY);
+          }
+          if (hasReloadFlag && seen === DEPLOY) {
+            var cleanUrl = location.pathname + location.search.replace(/[?&]_r=\d+/, '').replace(/^\?$/, '');
+            history.replaceState(null, '', cleanUrl || '/');
+          }
+        } catch(e) {}
+      })();
+    </script>
+    <!-- Background deploy-version detector: fetches server HTML periodically
+         and forces a full page reload if the server has a newer DEPLOY version.
+         Essential for browsers that ignore Cache-Control (e.g. WeChat). -->
+    <script>
+      (function(){ var DEPLOY = '20260925150000'; function checkDeploy() { fetch('/?_cb=' + Date.now(), {cache:'no-store'}).then(function(r){ return r.text(); }).then(function(html){ var m = html.match(/DEPLOY\s*=\s*'(\d+)'/); if (m && m[1] !== DEPLOY) { sessionStorage.removeItem('oma_deploy'); var sep = location.search ? '&' : '?'; location.href = location.pathname + location.search + sep + '_r=' + Date.now(); } }).catch(function(){}); } setInterval(checkDeploy, 15000); setTimeout(checkDeploy, 3000); })();
+    </script>
   </head>
   <body class="bg-bg text-fg antialiased">
     <div id="root"></div>

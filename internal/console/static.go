@@ -1,6 +1,7 @@
 package console
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -25,6 +26,17 @@ func NewStaticHandler(root string) http.Handler {
 			// Always revalidate the SPA shell so deploys/rebuilds are not
 			// stuck behind a cached index.html pointing at stale hashed assets.
 			w.Header().Set("Cache-Control", "no-cache")
+			// X-Deploy-Version lets the frontend detect when the server
+			// has been rebuilt/restarted with new assets.  The background
+			// deploy-check script in index.html fetches "/" with
+			// cache-busting and compares this header to the DEPLOY version
+			// baked into the HTML.  If they differ, the script forces a
+			// full page reload — essential for browsers that ignore
+			// Cache-Control headers (e.g. WeChat built-in browser).
+			if info, err := os.Stat(indexPath); err == nil {
+				w.Header().Set("X-Deploy-Version",
+					fmt.Sprintf("%d", info.ModTime().Unix()))
+			}
 			http.ServeFile(w, r, indexPath)
 		}
 

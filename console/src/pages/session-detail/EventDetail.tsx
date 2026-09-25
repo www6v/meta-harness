@@ -70,6 +70,22 @@ export interface EventDetailProps {
    * and other Markdown syntax reconstruct correctly.
    */
   mergedEvents?: Event[];
+  /**
+   * Pre-computed longest text for each agent.message `message_id`.
+   * Cumulative streaming events share the same `message_id` but grow
+   * in text length.  When the consecutive merge chain is broken (e.g.
+   * by a `session.status_running` event between agent messages), the
+   * detail pane would otherwise show only the clicked event's truncated
+   * text.  This map lets EventDetail always render the full content.
+   */
+  agentMessageLongestText?: Map<string, string>;
+  /**
+   * Pre-computed longest text from the selected merged group (or
+   * consecutive run).  When set, overrides the single-event text for
+   * `agent.message` rendering so the detail pane always shows the full
+   * response — matching the transcript row.
+   */
+  overrideText?: string;
 }
 
 export function EventDetail({
@@ -79,7 +95,16 @@ export function EventDetail({
   modelErrorCause,
   onViewInDebug,
   mergedEvents,
+  agentMessageLongestText,
+  overrideText,
 }: EventDetailProps) {
+  // For agent.message and agent.thinking events, the transcript row may show
+  // a merged/longest text while the single event has only a short fragment.
+  // overrideText is the authoritative "show this text" prop from the parent —
+  // it takes priority over everything else for these event types.
+  const isAgentMessage = event.type === "agent.message";
+  const isAgentThinking = event.type === "agent.thinking";
+
   // Merged consecutive agent.message / agent.thinking events are cumulative
   // streaming fragments — use the merged (final) text instead of the
   // primaryEvent (first, shortest fragment) so the detail pane matches
@@ -94,7 +119,25 @@ export function EventDetail({
     mergedEvents.every((e) => e.type === "agent.thinking");
 
   let content: React.ReactNode;
-  if (allAgentMessages) {
+  if (isAgentMessage && overrideText) {
+    // overrideText from parent — always the longest/best text available.
+    content = (
+      <Message from="assistant" className="max-w-full">
+        <MessageContent className="w-full">
+          <Markdown>{overrideText}</Markdown>
+        </MessageContent>
+      </Message>
+    );
+  } else if (isAgentThinking && overrideText) {
+    // Thinking override — show full consecutive thinking text.
+    content = (
+      <Reasoning defaultOpen>
+        <ReasoningTrigger />
+        <ReasoningContent>{overrideText}</ReasoningContent>
+      </Reasoning>
+    );
+  } else if (isAgentMessage && mergedEvents && mergedEvents.length > 1) {
+    // Merged group without explicit override — use getMergedEventText.
     content = (
       <Message from="assistant" className="max-w-full">
         <MessageContent className="w-full">

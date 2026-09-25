@@ -143,6 +143,10 @@ export function SessionDetail() {
     publicationId?: string;
   } | null>(null);
   const [status, setStatus] = useState("idle");
+  // Backend-verified status — updated by the status-sync poll. Shown as
+  // a small badge next to the StatusPill so users can see when the
+  // frontend's SSE-derived status is out of sync with the backend.
+  const [backendStatus, setBackendStatus] = useState<string>("");
   const [pendingToolCalls, setPendingToolCalls] = useState<PendingToolCallWire[]>([]);
   const [hitlSubmittingId, setHitlSubmittingId] = useState<string | null>(null);
   /** Set when user.interrupt lands — suppresses HITL panel so Stop does
@@ -897,27 +901,32 @@ export function SessionDetail() {
     return () => { abort.abort(); };
   }, [id]);
 
-  // Watchdog: if the session is "running" but no SSE events arrive for
-  // 30 seconds, poll the backend for the real status and auto-recover
-  // to "idle" if the turn already ended. This is a safety net for the
-  // case where the Hub's non-blocking publish drops session.status_idle
-  // (subscriber channel overflow during a fast event burst).
+  // Status sync: while the frontend shows "running", poll the backend
+  // every 5 seconds to verify. If the backend says "idle", force-sync.
+  // This handles ALL cases where the frontend gets out of sync:
+  // - Browser cache serving old JS without proper status_idle handling
+  // - SSE connection dropped without reconnecting
+  // - Hub non-blocking publish dropped the status_idle event
+  // - WeChat/aggressive-cache browsers not refreshing properly
+  // The polling stops automatically when status transitions to "idle".
   useEffect(() => {
     if (!id || status !== "running") return;
-    const interval = setInterval(() => {
-      const elapsed = Date.now() - lastEventAtRef.current;
-      if (elapsed < 30_000) return; // events still flowing, no need to poll
+    const poll = () => {
       api<{ status: string }>(`/v1/sessions/${id}`)
         .then((sess) => {
-          if (sess.status === "idle") {
+          setBackendStatus(sess.status);
+          if (sess.status === "idle" && status === "running") {
             setStatus("idle");
             setStreams(new Map());
             setThinkingStreams(new Map());
             setToolInputStreams(new Map());
           }
         })
-        .catch(() => {/* poll failure — ignore, retry next tick */});
-    }, 10_000); // check every 10s
+        .catch(() => {});
+    };
+    // Immediate first check, then every 5 seconds.
+    poll();
+    const interval = setInterval(poll, 5000);
     return () => clearInterval(interval);
   }, [id, status, api]);
 
@@ -1116,6 +1125,15 @@ export function SessionDetail() {
       <div className="pl-3 pr-4 py-3 flex flex-col gap-2 shrink-0">
         <div className="flex items-center gap-2 flex-wrap">
           <StatusPill status={status as "idle" | "running" | "terminated" | "error" | string} />
+          {/* Backend status sync indicator — visible when the backend disagrees
+              with the frontend's SSE-derived status. Shows "↻ synced" when idle
+              on both sides, or "⚠ backend: idle" when the frontend is stuck on
+              "running" but the backend has moved on. */}
+          {backendStatus && backendStatus !== status && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-medium animate-pulse">
+              ⚠ backend: {backendStatus} (syncing…)
+            </span>
+          )}
           {/* Trajectory outcome chip — only when the trajectory has actually
               finished. While the session is still running we let StatusPill
               carry the "Running…" signal alone (per Phase 3 spec) instead of
@@ -1333,9 +1351,6 @@ export function SessionDetail() {
           onSend={(text, files) => void send(text, files)}
           sending={sending}
           sessionId={id}
-          streams={streams}
-          thinkingStreams={thinkingStreams}
-          toolInputStreams={toolInputStreams}
         />
       ) : view === "debug" ? (
         <DebugTab

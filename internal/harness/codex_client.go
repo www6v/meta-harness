@@ -268,7 +268,14 @@ func (c *CodexClient) streamTurnHTTP(
 	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
 	var eventBuf strings.Builder
 	lastEventAt := time.Now()
-	noProgressTimeout := 10 * time.Second
+	// Inactivity timeout: codex turns can have long pauses between events
+	// (e.g. during tool execution, complex reasoning, or file I/O).  10s
+	// was too aggressive — a pause longer than 10s caused the Go reader
+	// to close the stream prematurely, discarding all subsequent
+	// cumulative events.  The Python bridge sends periodic keepalive
+	// comments (every 5s) to prevent proxy timeouts, so a 60s inactivity
+	// window is a safe upper bound for "the bridge is truly stuck".
+	noProgressTimeout := 60 * time.Second
 	// Overall stream timeout: if the stream doesn't close within 10 minutes,
 	// the bridge is likely stuck. This is a safety net for cases where the
 	// codex turn completes but the bridge never signals "done".
@@ -315,7 +322,15 @@ func (c *CodexClient) streamTurnHTTP(
 				return fmt.Errorf("codex sse: stream exceeded 10min deadline")
 			}
 			if line == "" {
-				// Blank line = end of SSE frame.
+				// Blank line = end of SSE frame.  Reset the inactivity
+				// timer for ALL frames — including keepalive comments
+				// (": keepalive\n\n") from the Python bridge — so that
+				// legitimate pauses in codex event production (e.g.
+				// during tool execution) don't prematurely close the
+				// stream.  Previously this was inside the
+				// eventBuf.Len() > 0 block, which meant keepalives
+				// didn't reset the timer.
+				lastEventAt = time.Now()
 				if eventBuf.Len() > 0 {
 					var ev json.RawMessage
 					if err := json.Unmarshal([]byte(eventBuf.String()), &ev); err == nil {
@@ -329,7 +344,6 @@ func (c *CodexClient) streamTurnHTTP(
 						log.Printf("codex: SSE unmarshal error: %v, data: %s", err, eventBuf.String())
 					}
 					eventBuf.Reset()
-					lastEventAt = time.Now()
 				}
 				continue
 			}
@@ -343,7 +357,7 @@ func (c *CodexClient) streamTurnHTTP(
 				log.Printf("codex: SSE no progress for %v (last event %v ago), closing stream with %d events", noProgressTimeout, time.Since(lastEventAt), eventCount)
 				return nil // treat as successful completion
 			}
-			log.Printf("codex: SSE timeout waiting for first event")
+			log.Printf("codex: SSE timeout waiting for first event after %v", noProgressTimeout)
 			return fmt.Errorf("codex sse: no events received within %v", noProgressTimeout)
 		}
 	}

@@ -116,6 +116,67 @@ export function DebugTab({
     [visibleEvents]
   );
 
+  // Find the display event group containing the selected event.
+  // NOTE: must be defined BEFORE debugOverrideText which depends on it.
+  const selectedDisplayEvent = useMemo(() => {
+    if (!selectedDebugEventId) return null;
+    return (
+      displayEvents.find((de) =>
+        de.events.some((e) => e.id === selectedDebugEventId)
+      ) ?? null
+    );
+  }, [displayEvents, selectedDebugEventId]);
+
+  // Compute the full text for the selected event's detail pane.
+  // Handles both merged groups and single events in a consecutive run.
+  // For delta streaming, concatenates all fragments.
+  // For cumulative streaming, returns the longest (last) text.
+  // Handles both agent.message and agent.thinking.
+  const debugOverrideText = useMemo(() => {
+    if (!selectedDisplayEvent) return undefined;
+    const mergedText = getMergedEventText(selectedDisplayEvent.events);
+    if (mergedText && selectedDisplayEvent.events.length > 1) return mergedText;
+    if (selectedDisplayEvent.events.length <= 1) {
+      const ev = selectedDisplayEvent.primaryEvent;
+      if (ev.type !== "agent.message" && ev.type !== "agent.thinking") return undefined;
+      const targetType = ev.type;
+      const idx = visibleEvents.findIndex((e) => e.id === ev.id);
+      if (idx < 0) return undefined;
+      const extractText = (e: Event): string => {
+        if (Array.isArray(e.content))
+          return e.content.map((b: { text?: string }) => b.text ?? "").join("");
+        if (typeof e.content === "string") return e.content;
+        if (typeof (e as { text?: string }).text === "string")
+          return (e as { text: string }).text;
+        return "";
+      };
+      const allTexts: string[] = [];
+      for (let i = idx - 1; i >= 0; i--) {
+        const prev = visibleEvents[i];
+        if (prev.type !== targetType) break;
+        allTexts.unshift(extractText(prev));
+      }
+      allTexts.push(extractText(ev));
+      for (let i = idx + 1; i < visibleEvents.length; i++) {
+        const next = visibleEvents[i];
+        if (next.type !== targetType) break;
+        allTexts.push(extractText(next));
+      }
+      if (allTexts.length <= 1) return allTexts[0] || undefined;
+      let isCumulative = true;
+      const checkLimit = Math.min(3, allTexts.length - 1);
+      for (let i = 0; i < checkLimit; i++) {
+        if (!allTexts[i + 1].startsWith(allTexts[i])) {
+          isCumulative = false;
+          break;
+        }
+      }
+      if (isCumulative) return allTexts[allTexts.length - 1] || undefined;
+      return allTexts.join("") || undefined;
+    }
+    return mergedText || undefined;
+  }, [selectedDisplayEvent, visibleEvents]);
+
   // Pair tool_use ↔ tool_result (bidirectional)
   const toolPairing = useMemo(
     () => pairToolResults(filteredEvents),
@@ -138,15 +199,6 @@ export function DebugTab({
     return (
       group.events.find((e) => e.id === selectedDebugEventId)
       ?? group.primaryEvent
-    );
-  }, [displayEvents, selectedDebugEventId]);
-
-  const selectedDisplayEvent = useMemo(() => {
-    if (!selectedDebugEventId) return null;
-    return (
-      displayEvents.find((de) =>
-        de.events.some((e) => e.id === selectedDebugEventId)
-      ) ?? null
     );
   }, [displayEvents, selectedDebugEventId]);
 
@@ -346,6 +398,8 @@ export function DebugTab({
                     ? selectedDisplayEvent.events
                     : undefined
                 }
+                agentMessageLongestText={new Map()}
+                overrideText={debugOverrideText}
               />
             }
             raw={formatEventRaw(

@@ -3,7 +3,11 @@
  *
  * Left panel: flat event list with category filter, HITL panel at bottom.
  * Right panel: EventDetailPane (type / time / Rendered|Raw) + "View in Debug →".
- * Streaming overlays render only in this tab (not in Debug tab).
+ *
+ * Design: single-pipeline rendering. Both running and post-refresh views
+ * go through the same getMergedEventText pipeline — no separate streaming
+ * overlays. This guarantees that what you see during a running session
+ * matches what you see after refreshing the page.
  *
  * Events are color-coded by category:
  * - User: red/pink
@@ -13,25 +17,18 @@
  * - System: gray
  */
 
-import { DownloadIcon, Link2Icon } from "lucide-react";
+import { Link2Icon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import type { Event } from "../../lib/events";
 import { pairSessionErrors, pairToolResults } from "../../lib/tool-pairing";
 import { cn } from "../../lib/utils";
-import { Markdown } from "../../components/Markdown";
-import { CodeBlock } from "../../components/ai-elements/code-block";
 import {
   PromptInput,
-  PromptInputActionMenu,
-  PromptInputActionMenuContent,
-  PromptInputActionMenuTrigger,
-  PromptInputActionMenuItem,
   PromptInputTextarea,
   PromptInputFooter,
   PromptInputSubmit,
 } from "../../components/ai-elements/prompt-input";
-import { Button } from "@/components/ui/button";
 import { EventDetail } from "./EventDetail";
 import {
   EventDetailPane,
@@ -46,6 +43,15 @@ import {
   type TranscriptCategory,
 } from "./EventRow";
 
+/** Extract full text from an agent.message event. */
+function extractAgentText(e: Event): string {
+  return Array.isArray(e.content)
+    ? e.content.map((b: { text?: string }) => b.text ?? "").join("")
+    : typeof e.content === "string"
+      ? e.content
+      : "";
+}
+
 export interface TranscriptTabProps {
   events: Event[];
   activeThreadId: string;
@@ -55,11 +61,6 @@ export interface TranscriptTabProps {
   onSend?: (text: string, files?: File[]) => void;
   sending?: boolean;
   sessionId?: string;
-
-  /** Streaming overlays — rendered only in Transcript tab */
-  streams?: Map<string, string>;
-  thinkingStreams?: Map<string, string>;
-  toolInputStreams?: Map<string, { name?: string; partial: string }>;
 }
 
 const CATEGORY_LABELS: Record<TranscriptCategory, string> = {
@@ -102,10 +103,6 @@ export function TranscriptTab({
   sending = false,
   sessionId,
 
-  streams,
-  thinkingStreams,
-  toolInputStreams,
-
 }: TranscriptTabProps) {
   const [selectedCategories, setSelectedCategories] = useState<Set<TranscriptCategory>>(
     new Set(["user", "agent", "tool", "error", "message", "auxiliary"])
@@ -146,17 +143,10 @@ export function TranscriptTab({
       }
       // Skip status events
       if (e.type.startsWith("session.status_")) return false;
-      // Skip events currently shown in streaming overlays to avoid duplication.
-      // The streaming overlay will show the growing content with animation;
-      // once the turn ends (streams cleared), the merged event row takes over.
-      if (e.type === "agent.message" && e.id && streams?.has(e.id)) return false;
-      if (e.type === "agent.thinking" && e.id && thinkingStreams?.has(e.id)) return false;
-      if ((e.type === "agent.tool_use" || e.type === "agent.mcp_tool_use" || e.type === "agent.custom_tool_use")
-        && e.id && toolInputStreams?.has(e.id)) return false;
       // Filter by category
       return selectedCategories.has(categorizeEvent(e));
     });
-  }, [filteredEvents, selectedCategories, pairedResultIds, streams, thinkingStreams, toolInputStreams]);
+  }, [filteredEvents, selectedCategories, pairedResultIds]);
 
   // Merge consecutive agent.message events
   const displayEvents = useMemo(
@@ -164,13 +154,116 @@ export function TranscriptTab({
     [visibleEvents]
   );
 
-  // Check if selected event is part of a merged group
+  // Check if selected event is part of a merged group.
+  // NOTE: must be defined BEFORE detailOverrideText which depends on it.
   const selectedDisplayEvent = useMemo(() => {
     if (!selectedEventId) return null;
     return displayEvents.find((de) =>
       de.events.some((e) => e.id === selectedEventId)
     ) ?? null;
   }, [displayEvents, selectedEventId]);
+
+  // For each agent.message message_id, find the longest text among all
+  // events sharing that id.  Cumulative streaming events share the same
+  // `message_id` but grow in text length.  If a non-agent event (e.g.
+  // session.status_running) breaks the consecutive run, the merge logic
+  // creates separate groups — clicking a single-event group would show
+  // only that event's truncated text in the detail pane.  This map lets
+  // EventDetail always render the full content regardless of grouping.
+  const agentMessageLongestText = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const e of visibleEvents) {
+      if (e.type !== "agent.message") continue;
+      const mid = typeof e.message_id === "string" ? e.message_id : undefined;
+      if (!mid) continue;
+      const text = Array.isArray(e.content)
+        ? e.content.map((b: { text?: string }) => b.text ?? "").join("")
+        : typeof e.content === "string"
+          ? e.content
+          : "";
+      if (text.length > (map.get(mid)?.length ?? 0)) {
+        map.set(mid, text);
+      }
+    }
+    return map;
+  }, [visibleEvents]);
+
+  // For merged groups: compute the full text from all events in the group.
+  // Handles both cumulative (prefix-growing) and delta (fragment) streaming.
+  // For delta streaming (DeepSeek / Codex harness), each event is a short
+  // fragment and the full message is the concatenation of all fragments.
+  // For cumulative streaming, each event contains the full text so far
+  // and the last event has the complete message.
+  // Handles both agent.message and agent.thinking — consecutive runs of
+  // either type should display the full concatenated text in the detail pane.
+  const detailOverrideText = useMemo(() => {
+    if (!selectedDisplayEvent) return undefined;
+    const isMergedGroup = selectedDisplayEvent.events.length > 1;
+    if (isMergedGroup) {
+      // Merged group: getMergedEventText handles both delta and cumulative.
+      return getMergedEventText(selectedDisplayEvent.events) || undefined;
+    }
+    // Single event: walk consecutive same-type events in visibleEvents
+    // to find the full run of delta fragments (or cumulative updates).
+    const ev = selectedDisplayEvent.primaryEvent;
+    if (ev.type !== "agent.message" && ev.type !== "agent.thinking") return undefined;
+    const targetType = ev.type;
+    const idx = visibleEvents.findIndex((e) => e.id === ev.id);
+    if (idx < 0) return undefined;
+    // Collect all consecutive events of the same type (forward + backward).
+    const allTexts: string[] = [];
+    // Walk backward
+    for (let i = idx - 1; i >= 0; i--) {
+      const prev = visibleEvents[i];
+      if (prev.type !== targetType) break;
+      allTexts.unshift(extractAgentText(prev));
+    }
+    // Current event — use extractEventText for thinking (reads e.text fallback),
+    // extractAgentText for messages (reads e.content).
+    allTexts.push(
+      targetType === "agent.thinking"
+        ? (Array.isArray(ev.content)
+            ? ev.content.map((b: { text?: string }) => b.text ?? "").join("")
+            : typeof ev.content === "string"
+              ? ev.content
+              : typeof (ev as { text?: string }).text === "string"
+                ? (ev as { text: string }).text
+                : "")
+        : extractAgentText(ev)
+    );
+    // Walk forward
+    for (let i = idx + 1; i < visibleEvents.length; i++) {
+      const next = visibleEvents[i];
+      if (next.type !== targetType) break;
+      allTexts.push(
+        targetType === "agent.thinking"
+          ? (Array.isArray(next.content)
+              ? next.content.map((b: { text?: string }) => b.text ?? "").join("")
+              : typeof next.content === "string"
+                ? next.content
+                : typeof (next as { text?: string }).text === "string"
+                  ? (next as { text: string }).text
+                  : "")
+          : extractAgentText(next)
+      );
+    }
+    if (allTexts.length <= 1) return allTexts[0] || undefined;
+    // Detect cumulative: if each text is a prefix of the next, it's cumulative.
+    let isCumulative = true;
+    const checkLimit = Math.min(3, allTexts.length - 1);
+    for (let i = 0; i < checkLimit; i++) {
+      if (!allTexts[i + 1].startsWith(allTexts[i])) {
+        isCumulative = false;
+        break;
+      }
+    }
+    if (isCumulative) {
+      // Cumulative: last text has the complete message.
+      return allTexts[allTexts.length - 1] || undefined;
+    }
+    // Delta: concatenate all fragments.
+    return allTexts.join("") || undefined;
+  }, [selectedDisplayEvent, visibleEvents]);
 
   const toggleCategory = (cat: TranscriptCategory) => {
     setSelectedCategories((prev) => {
@@ -210,7 +303,7 @@ export function TranscriptTab({
 
         {/* Event list */}
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
-          {displayEvents.length === 0 && !streams?.size && !thinkingStreams?.size && !toolInputStreams?.size ? (
+          {displayEvents.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               No events
             </div>
@@ -238,55 +331,6 @@ export function TranscriptTab({
                   </div>
                 );
               })}
-              {/* Streaming overlays — show in-flight content with animations */}
-              {thinkingStreams && Array.from(thinkingStreams.entries()).map(([tid, text]) => (
-                <div
-                  key={`think-stream-${tid}`}
-                  className={cn("rounded-md p-2", CATEGORY_BG.agent)}
-                >
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-                    <span className="inline-block h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-                    <span className="font-medium uppercase tracking-wide">Thinking…</span>
-                  </div>
-                  <div className="text-sm text-foreground/80 whitespace-pre-wrap">
-                    {text}
-                    <span className="inline-block w-1.5 h-3.5 bg-fg-subtle/50 align-middle ml-0.5 animate-pulse" />
-                  </div>
-                </div>
-              ))}
-              {toolInputStreams && Array.from(toolInputStreams.entries()).map(([tid, { name, partial }]) => (
-                <div
-                  key={`tool-stream-${tid}`}
-                  className={cn("rounded-md p-2", CATEGORY_BG.tool)}
-                >
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-                    <span className="inline-block h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
-                    <span className="font-medium uppercase tracking-wide">
-                      {name ?? "Tool"} — streaming input…
-                    </span>
-                  </div>
-                  {partial && (
-                    <div className="rounded-md bg-muted/50 p-1">
-                      <CodeBlock code={partial} language="json" />
-                    </div>
-                  )}
-                </div>
-              ))}
-              {streams && Array.from(streams.entries()).map(([mid, text]) => (
-                <div
-                  key={`stream-${mid}`}
-                  className={cn("rounded-md p-2", CATEGORY_BG.agent)}
-                >
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-                    <span className="inline-block h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-                    <span className="font-medium uppercase tracking-wide">Assistant</span>
-                  </div>
-                  <div className="text-sm text-foreground">
-                    <Markdown>{text}</Markdown>
-                    <span className="inline-block w-1.5 h-3.5 bg-fg-subtle/50 align-middle ml-0.5 animate-pulse" />
-                  </div>
-                </div>
-              ))}
             </div>
           )}
         </div>
@@ -382,6 +426,8 @@ export function TranscriptTab({
                     ? selectedDisplayEvent.events
                     : undefined
                 }
+                agentMessageLongestText={agentMessageLongestText}
+                overrideText={detailOverrideText}
               />
             }
             raw={formatEventRaw(

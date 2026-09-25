@@ -140,6 +140,12 @@ export type DisplayEvent = {
 /**
  * Merge consecutive agent.message events into a single display event.
  * Thinking / tool_use / other categories break the run.
+ *
+ * Cumulative streaming fix: harnesses often emit multiple `agent.message`
+ * events sharing the same `message_id` (increasing `seq`, growing content).
+ * Without dedup, every cumulative update becomes a separate row — each
+ * showing the full text, causing "大量重复的内容".  We deduplicate by
+ * `message_id`: keep only the last (most complete) event per id.
  */
 export function mergeConsecutiveAgentEvents(events: Event[]): DisplayEvent[] {
   const result: DisplayEvent[] = [];
@@ -160,6 +166,20 @@ export function mergeConsecutiveAgentEvents(events: Event[]): DisplayEvent[] {
       && (e.type === "agent.message" || e.type === "agent.thinking");
 
     if (isMergeable && e.type === currentType) {
+      // Deduplicate by message_id: if this event shares a message_id with
+      // an earlier event in the group, replace it (keep the latest text).
+      const mid = (e as { message_id?: unknown }).message_id;
+      if (typeof mid === "string" && mid.length > 0) {
+        const dupIdx = currentGroup.findIndex(
+          (ge) => (ge as { message_id?: unknown }).message_id === mid
+        );
+        if (dupIdx >= 0) {
+          // Replace the older duplicate with this newer, more complete event.
+          currentGroup[dupIdx] = e;
+          // Don't push — we replaced in-place.
+          continue;
+        }
+      }
       currentGroup.push(e);
     } else {
       if (currentGroup.length > 0) {
@@ -228,21 +248,29 @@ export function getMergedEventText(events: Event[]): string {
     return texts[texts.length - 1];
   }
 
-  // Not cumulative: for thinking events each is a complete rewrite of the
-  // reasoning so far, and for message events the harness always sends
-  // cumulative (prefix-growing) content in practice.  Using the last
-  // event's text is correct for both cases — joining would duplicate
-  // rewritten thinking, and delta concatenation never occurs from the
-  // harness.
-  return texts[texts.length - 1];
+  // Not cumulative — delta streaming: each event is an independent fragment.
+  // Concatenate all fragments to reconstruct the full message.
+  // This is the case for the DeepSeek / Codex harness where each
+  // `assistant/chunk` produces a separate `agent.message` event with
+  // only the new text fragment.
+  return texts.join("");
 }
 
 function extractEventText(e: Event): string {
-  return Array.isArray(e.content)
-    ? e.content.map((b) => b.text).join("")
-    : typeof e.content === "string"
-      ? e.content
-      : "";
+  if (Array.isArray(e.content)) {
+    return e.content.map((b) => b.text).join("");
+  }
+  if (typeof e.content === "string") {
+    return e.content;
+  }
+  // agent.thinking stores its text on `e.text` rather than `e.content`.
+  // Without this fallback, thinking events with only `e.text` return ""
+  // and get filtered out of getMergedEventText's concatenation — the
+  // merged row's text would be wrong for cumulative thinking streams.
+  if (typeof (e as { text?: unknown }).text === "string") {
+    return (e as { text: string }).text;
+  }
+  return "";
 }
 
 /**
