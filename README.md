@@ -141,7 +141,7 @@ Compose mounts a shared `/data` volume for `SESSION_OUTPUTS_DIR`, `FILES_DATA_DI
 └─────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  oma-sdk (Python) — https://github.com/www6v/oma-sdk                    │
+│  meta-harness-sdk (Python) — https://github.com/www6v/meta-harness-sdk                    │
 │  anthropic base_url + httpx OMA-only resources · cookbook helpers       │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -174,7 +174,7 @@ Compose mounts a shared `/data` volume for `SESSION_OUTPUTS_DIR`, `FILES_DATA_DI
 | | `call_agent/` | Sub-agent delegation runtime. |
 | | `workflow_*.py` | OMA bootstrap + sub-agent runner for `pi_dynamic_workflows`. |
 | | `extensions/` | `web_fetch`, `web_search`, `mcp_loader`, `call_agent` piPy extensions. |
-| **SDK (Python)** | [oma-sdk](https://github.com/www6v/oma-sdk) | `OMAClient` + resource classes; cookbook streaming helpers. |
+| **SDK (Python)** | [meta-harness-sdk](https://github.com/www6v/meta-harness-sdk) | `OMAClient` + resource classes; cookbook streaming helpers. |
 
 ### Request flow (one user turn)
 
@@ -305,12 +305,12 @@ Also available: `GET /health`, model cards, managed harnesses (`GET /v1/config/h
 
 ## Python SDK
 
-The SDK is at [`https://github.com/www6v/oma-sdk`](https://github.com/www6v/oma-sdk) as `oma-sdk` v0.1.0 (local install only; not yet on PyPI).
+The SDK is at [`https://github.com/www6v/meta-harness-sdk`](https://github.com/www6v/meta-harness-sdk) as `meta-harness-sdk` v0.1.0 (local install only; not yet on PyPI).
 
 ```bash
 # With platform running on :8787
-git clone https://github.com/www6v/oma-sdk.git
-cd oma-sdk
+git clone https://github.com/www6v/meta-harness-sdk.git
+cd meta-harness-sdk
 uv sync
 export OMA_API_KEY=dev-key
 
@@ -329,7 +329,7 @@ agent = client.agents.create(name="hello", model={"id": "claude-sonnet-4-6"})
 session = client.sessions.create(agent=agent.id)
 ```
 
-See [SDK-PLAN.md](https://github.com/www6v/oma-sdk/blob/master/SDK-PLAN.md) and [example/README.md](https://github.com/www6v/oma-sdk/blob/master/example/README.md) for resource coverage and cookbook examples.
+See [SDK-PLAN.md](https://github.com/www6v/meta-harness-sdk/blob/master/SDK-PLAN.md) and [example/README.md](https://github.com/www6v/meta-harness-sdk/blob/master/example/README.md) for resource coverage and cookbook examples.
 
 ## Console UI
 
@@ -399,12 +399,12 @@ See `.env.example` for sandbox provider credentials (OpenSandbox, LiteBox, E2B, 
 
 - **Platform:** Go 1.24+, chi, go-sql-driver/mysql
 - **Harness:** Python 3.11+, FastAPI, piPy (`pi_coding_agent`), `pi_dynamic_workflows`
-- **SDK:** Python 3.11+, anthropic SDK 0.111+ with custom `base_url`, httpx ([oma-sdk](https://github.com/www6v/oma-sdk))
+- **SDK:** Python 3.11+, anthropic SDK 0.111+ with custom `base_url`, httpx ([meta-harness-sdk](https://github.com/www6v/meta-harness-sdk))
 - **Deploy:** Single static Go binary + Python sidecar; Docker Compose for local/prod-like runs; MySQL for platform data
 
 ## Still deferred
 
-Cloudflare Workers / SessionDO, **CF Container** sandboxes (distinct from the pluggable local/OpenSandbox/E2B/… providers above), R2/FUSE memory, Analytics Engine billing, **browser tools** (T16), multi-region D1 sharding, **`/v1/cap-cli/oauth`**, integration install → vault dual-write, and **TypeScript SDK / `oma` CLI** packages remain out of scope or partial. The **Python SDK** (`oma-sdk` v0.1.0) is available at [`https://github.com/www6v/oma-sdk`](https://github.com/www6v/oma-sdk) but not yet published to PyPI. See [MVP-MIGRATION-PLAN.md](./docs/api-migrate/MVP-MIGRATION-PLAN.md) for the full parity matrix and backlog.
+Cloudflare Workers / SessionDO, **CF Container** sandboxes (distinct from the pluggable local/OpenSandbox/E2B/… providers above), R2/FUSE memory, Analytics Engine billing, **browser tools** (T16), multi-region D1 sharding, **`/v1/cap-cli/oauth`**, integration install → vault dual-write, and **TypeScript SDK / `oma` CLI** packages remain out of scope or partial. The **Python SDK** (`meta-harness-sdk` v0.1.0) is available at [`https://github.com/www6v/meta-harness-sdk`](https://github.com/www6v/meta-harness-sdk) but not yet published to PyPI. See [MVP-MIGRATION-PLAN.md](./docs/api-migrate/MVP-MIGRATION-PLAN.md) for the full parity matrix and backlog.
 
 ## License
 

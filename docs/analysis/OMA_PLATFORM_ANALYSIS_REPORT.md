@@ -399,7 +399,7 @@ Harness 是 OMA 平台的 **AI Agent 执行引擎 sidecar**，以 Python/FastAPI
 | MCP SDK | ≥ 1.27.2 |
 | PyMySQL | ≥ 1.1.0 |
 | 包管理 | uv + hatchling |
-| 自研依赖 | pi-coding-agent, pi-ai, pi-subagent, pi-team, pi-dynamic-workflows, oma-sdk（均 Git 源） |
+| 自研依赖 | pi-coding-agent, pi-ai, pi-subagent, pi-team, pi-dynamic-workflows, meta-harness-sdk（均 Git 源） |
 
 ### 5.3 API 端点
 
@@ -425,7 +425,7 @@ Harness 是 OMA 平台的 **AI Agent 执行引擎 sidecar**，以 Python/FastAPI
 
 ### 5.5 工作流与沙箱执行
 
-- **OmaWorkflowBootstrap**：通过 oma-sdk 创建 Worker/Coordinator Agent + Session，配置 SubAgentRuntime
+- **OmaWorkflowBootstrap**：通过 meta-harness-sdk 创建 Worker/Coordinator Agent + Session，配置 SubAgentRuntime
 - **OmaSubAgentRunner**：工作流步骤委派到独立 sub-thread，支持结构化输出 + schema 修复重试
 - **沙箱路径规范化**：`/mnt/session/outputs/`、`/mnt/session/uploads/`、`/mnt/memory/` 等 AMA 路径
 - **远程沙箱**：e2b/daytona 等通过平台 `POST /v1/sessions/:id/exec` 执行 bash

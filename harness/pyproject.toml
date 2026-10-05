@@ -21,7 +21,7 @@ dependencies = [
   "pymysql>=1.1.0",
   # OMA platform SDK — workflow bootstrap uses it to create OMA agents /
   # sessions so workflow executions appear in /agents and /sessions.
-  "oma-sdk",
+  "meta-harness-sdk",
 ]
 
 [tool.uv.sources]
@@ -31,7 +31,7 @@ pi-subagent = { git = "https://gitee.com/www6v6v/pipy-subagent.git", branch = "v
 pi-team = { git = "https://gitee.com/www6v6v/pipy-teams.git", branch = "v0.1.0", subdirectory = "packages/pi_team" }
 pi-memory = { git = "https://gitee.com/www6v6v/piPy-hermes-memory.git", branch = "master", subdirectory = "packages/pi_memory" }
 pi-dynamic-workflows = { git = "https://gitee.com/www6v6v/pipy-dynamic-workflows.git", branch = "v0.1.0", subdirectory = "packages/pi_dynamic_workflows" }
-oma-sdk = { git = "https://gitee.com/www6v6v/oma-sdk.git", branch = "master" }
+meta-harness-sdk = { git = "https://gitee.com/www6v6v/meta-harness-sdk.git", branch = "master" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -141,7 +141,7 @@ Compose 会把 `SESSION_OUTPUTS_DIR`、`FILES_DATA_DIR` 等指向共享卷 `/dat
 └─────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  oma-sdk（Python）— https://github.com/www6v/oma-sdk                    │
+│  meta-harness-sdk（Python）— https://github.com/www6v/meta-harness-sdk                    │
 │  anthropic base_url + httpx OMA-only 资源 · cookbook 辅助函数            │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -174,7 +174,7 @@ Compose 会把 `SESSION_OUTPUTS_DIR`、`FILES_DATA_DIR` 等指向共享卷 `/dat
 | | `call_agent/` | 子 Agent 委派运行时。 |
 | | `workflow_*.py` | 对接 `pi_dynamic_workflows` 的 OMA bootstrap 与子 Agent runner。 |
 | | `extensions/` | `web_fetch`、`web_search`、`mcp_loader`、`call_agent` 等 piPy 扩展。 |
-| **SDK（Python）** | [oma-sdk](https://github.com/www6v/oma-sdk) | `OMAClient` + 资源类；cookbook 流式辅助函数。 |
+| **SDK（Python）** | [meta-harness-sdk](https://github.com/www6v/meta-harness-sdk) | `OMAClient` + 资源类；cookbook 流式辅助函数。 |
 
 ### 一次用户回合的请求流程
 
@@ -302,12 +302,12 @@ POST   /v1/clawhub/*                       # ClawHub 技能搜索 / 导入
 
 ## Python SDK
 
-SDK 位于 [`https://github.com/www6v/oma-sdk`](https://github.com/www6v/oma-sdk)，版本 `oma-sdk` v0.1.0（仅本地安装，尚未发布到 PyPI）。
+SDK 位于 [`https://github.com/www6v/meta-harness-sdk`](https://github.com/www6v/meta-harness-sdk)，版本 `meta-harness-sdk` v0.1.0（仅本地安装，尚未发布到 PyPI）。
 
 ```bash
 # 需 platform 在 :8787 运行
-git clone https://github.com/www6v/oma-sdk.git
-cd oma-sdk
+git clone https://github.com/www6v/meta-harness-sdk.git
+cd meta-harness-sdk
 uv sync
 export OMA_API_KEY=dev-key
 
@@ -326,7 +326,7 @@ agent = client.agents.create(name="hello", model={"id": "claude-sonnet-4-6"})
 session = client.sessions.create(agent=agent.id)
 ```
 
-资源覆盖与 Cookbook 示例见 [SDK-PLAN.md](https://github.com/www6v/oma-sdk/blob/master/SDK-PLAN.md) 与 [example/README.md](https://github.com/www6v/oma-sdk/blob/master/example/README.md)。
+资源覆盖与 Cookbook 示例见 [SDK-PLAN.md](https://github.com/www6v/meta-harness-sdk/blob/master/SDK-PLAN.md) 与 [example/README.md](https://github.com/www6v/meta-harness-sdk/blob/master/example/README.md)。
 
 ## Console 控制台
 
@@ -396,12 +396,12 @@ session = client.sessions.create(agent=agent.id)
 
 - **平台：** Go 1.24+、chi、go-sql-driver/mysql
 - **执行器：** Python 3.11+、FastAPI、piPy（`pi_coding_agent`）、`pi_dynamic_workflows`
-- **SDK：** Python 3.11+、anthropic SDK 0.111+ 自定义 `base_url`、httpx（[oma-sdk](https://github.com/www6v/oma-sdk)）
+- **SDK：** Python 3.11+、anthropic SDK 0.111+ 自定义 `base_url`、httpx（[meta-harness-sdk](https://github.com/www6v/meta-harness-sdk)）
 - **部署：** 单个 Go 静态二进制 + Python 侧车；Docker Compose 用于本地/类生产运行；平台数据使用 MySQL
 
 ## 仍属延后范围
 
-Cloudflare Workers / SessionDO、**CF Container** 沙箱（不同于上文已实现的 local/OpenSandbox/E2B 等可插拔沙箱）、R2/FUSE memory、Analytics Engine 计费、**browser tools**（T16）、多区域 D1 分片、**`/v1/cap-cli/oauth`**、Integration install → vault 双写，以及 **TypeScript SDK / `oma` CLI** 包仍在范围外或仅部分实现。**Python SDK**（`oma-sdk` v0.1.0）见 [`https://github.com/www6v/oma-sdk`](https://github.com/www6v/oma-sdk)，尚未发布到 PyPI。完整对齐矩阵与 backlog 见 [MVP-MIGRATION-PLAN.md](./docs/api-migrate/MVP-MIGRATION-PLAN.md)。
+Cloudflare Workers / SessionDO、**CF Container** 沙箱（不同于上文已实现的 local/OpenSandbox/E2B 等可插拔沙箱）、R2/FUSE memory、Analytics Engine 计费、**browser tools**（T16）、多区域 D1 分片、**`/v1/cap-cli/oauth`**、Integration install → vault 双写，以及 **TypeScript SDK / `oma` CLI** 包仍在范围外或仅部分实现。**Python SDK**（`meta-harness-sdk` v0.1.0）见 [`https://github.com/www6v/meta-harness-sdk`](https://github.com/www6v/meta-harness-sdk)，尚未发布到 PyPI。完整对齐矩阵与 backlog 见 [MVP-MIGRATION-PLAN.md](./docs/api-migrate/MVP-MIGRATION-PLAN.md)。
 
 ## 许可证
 

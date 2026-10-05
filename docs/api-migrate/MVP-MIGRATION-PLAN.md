@@ -3,7 +3,7 @@
 > Engineering review — 2026-07-10（Sandbox Phase A 专项审查 + 矩阵同步）  
 > 目标仓库：`meta-harness`（Go 平台 + Python piPy harness 侧车 + Python SDK）  
 > 参考源：`../open-managed-agents`（Cloudflare Workers meta-harness）  
-> 已确认范围：**P0 + P1 + P2 主体已完成**；T1–T21（除 T16 browser defer）✅；**Python SDK `oma-sdk` v0.1.0** ✅（`sdk/`）；Managed Agents Cookbook example1–9 + Go CI 探针 ✅；**下一 sprint：Sandbox Phase A（T23–T26）**；剩余 **cap-cli OAuth**、**TS SDK / `oma` CLI 发布**、install **vault 双写** 与生产硬化
+> 已确认范围：**P0 + P1 + P2 主体已完成**；T1–T21（除 T16 browser defer）✅；**Python SDK `meta-harness-sdk` v0.1.0** ✅（`sdk/`）；Managed Agents Cookbook example1–9 + Go CI 探针 ✅；**下一 sprint：Sandbox Phase A（T23–T26）**；剩余 **cap-cli OAuth**、**TS SDK / `oma` CLI 发布**、install **vault 双写** 与生产硬化
 
 ## 文档说明
 
@@ -248,7 +248,7 @@ POST /v1/sessions/:id/files { path } → read workdir → fileblob      [T24]
 | /v1/oma/* 路由别名 | main index | `oma_aliases.go` + `router.go` | ✅ | T19 + T21 oauth/clawhub |
 | Rate limiting | CF RL namespaces | `internal/ratelimit/` | ✅ | T20 Go middleware |
 | Multi-tenant D1 分片 | `tenant-db` | 单 SQLite `tenant_id` | 🟡 | 够用至多 replica |
-| Python SDK (`oma-sdk`) | `packages/sdk` (Python subset) | `sdk/sdk/` v0.1.0 | 🟡 | T22a ✅：anthropic `base_url` + httpx OMA-only 资源；example1–9 + pytest E2E；**未 PyPI 发布** |
+| Python SDK (`meta-harness-sdk`) | `packages/sdk` (Python subset) | `sdk/sdk/` v0.1.0 | 🟡 | T22a ✅：anthropic `base_url` + httpx OMA-only 资源；example1–9 + pytest E2E；**未 PyPI 发布** |
 | TS SDK / `oma` CLI | `packages/sdk`, `packages/cli` | — | 🟡 | T22b defer：外部自动化可用 Python SDK 或 curl |
 | RL 子系统 | `rl/` | — | ⏭ | 独立产品线 |
 
@@ -359,7 +359,7 @@ POST /v1/sessions/:id/files { path } → read workdir → fileblob      [T24]
 | T19 | `/v1/oma/*` 别名 | main index | `oma_aliases.go` | ✅ |
 | T20 | Rate limiting | CF RL | Go middleware | ✅ |
 | T21 | 通用 oauth + clawhub | `oauth.ts`, `clawhub.ts` | `oauth_v1.go`, `clawhub.go`, `oauthflow/` | ✅ |
-| T22a | Python SDK (`oma-sdk`) | `packages/sdk` Python subset | `sdk/sdk/` + example1–9 | ✅ 2026-07 |
+| T22a | Python SDK (`meta-harness-sdk`) | `packages/sdk` Python subset | `sdk/sdk/` + example1–9 | ✅ 2026-07 |
 | T22b | TS SDK / `oma` CLI 发布 | `packages/sdk`, `packages/cli` | 独立发布 | Phase 3 defer |
 | T27 | Workspace backup/restore | `WorkspaceBackupService` | `internal/workdir/backup.go` + `022_workspace_backups.sql` | ✅ Phase B |
 | T28 | E2B/Daytona 沙箱适配器 | `adapters/e2b.ts`, `daytona.ts` | `internal/sandbox/e2b.go`, `daytona.go` + exec API | ✅ |
@@ -372,7 +372,7 @@ POST /v1/sessions/:id/files { path } → read workdir → fileblob      [T24]
 ## 目标数据流（当前实况）
 
 ```
-Client / Console / Python SDK (oma-sdk)
+Client / Console / Python SDK (meta-harness-sdk)
        │
        ▼
 ┌──────────────────────────────────────┐
@@ -480,7 +480,7 @@ Client / Console / Python SDK (oma-sdk)
 - [x] **T19 (P3)** — `/v1/oma/*` 路由别名 — `oma_aliases.go` + `oma_aliases_test.go`
 - [x] **T20 (P3)** — Rate limiting middleware — `internal/ratelimit/` — Verify: `go test ./internal/ratelimit/...`
 - [x] **T21 (P3)** — 通用 `/v1/oauth` + clawhub — Verify: `go test ./internal/oauthflow/... ./internal/api/ -run 'OAuth|Clawhub'`
-- [x] **T22a (P3)** — Python SDK `oma-sdk` v0.1.0 — `sdk/sdk/` + example1–9 — Verify: `sdk/tests/test.sh`, CI `Test*Cookbook*`
+- [x] **T22a (P3)** — Python SDK `meta-harness-sdk` v0.1.0 — `sdk/sdk/` + example1–9 — Verify: `sdk/tests/test.sh`, CI `Test*Cookbook*`
 - [ ] **T22b (P3)** — TypeScript SDK / `oma` CLI 独立发布
 - [x] **T23 (P0'')** — Sandbox memory symlink + `.mnt/memory` + read-only — `internal/workdir/` + `sandbox_paths.py` — Verify: `go test ./internal/workdir/...`, `harness/tests/test_sandbox_paths.py`
 - [x] **T24 (P0'')** — `POST /v1/sessions/:id/files` promoteSandboxFile — `internal/api/session_files.go` — Verify: `go test ./internal/api/ -run PromoteSandbox`, `scripts/e2e/smoke-promote-sandbox-e2e.sh`

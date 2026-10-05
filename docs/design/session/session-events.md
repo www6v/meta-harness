@@ -275,7 +275,7 @@ Console 按线程过滤同一份日志即可展示「Main / Worker」多个 Tab�
 | piPy → OMA | `harness/oma_adapter/emit.py` | 工具 / 消息事件映射 |
 | OMA → prompt | `harness/oma_adapter/project.py` | 历史投影与线程过滤 |
 | TS 类型定义 | `console/packages/api-types/src/types.ts` | `SessionEvent` 联合类型 |
-| Python SDK | `oma-sdk/sdk/api/sessions.py` | `send` / `list` / `stream` |
+| Python SDK | `meta-harness-sdk/sdk/api/sessions.py` | `send` / `list` / `stream` |
 
 ## 设计原则小结
 
