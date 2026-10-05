@@ -1,4 +1,4 @@
-﻿# open-managed-agents → meta-harness 迁移计划
+# open-managed-agents → meta-harness 迁移计划
 
 > Engineering review — 2026-07-10（Sandbox Phase A 专项审查 + 矩阵同步）  
 > 目标仓库：`meta-harness`（Go 平台 + Python piPy harness 侧车 + Python SDK）  

@@ -1,4 +1,4 @@
-﻿# meta-harness
+# meta-harness
 
 > English: [README.md](./README.md)
 
