@@ -70,6 +70,7 @@ type Deps struct {
 	// Hermes, DeepSeek) are enabled. Surfaced to the console UI so the
 	// Harness dropdown can grey out disabled backends.
 	ManagedHarness harness.HarnessState
+	CodexClient     *harness.CodexClient
 	// InstallBridgeHTTP overrides outbound HTTP for install/OAuth (tests).
 	InstallBridgeHTTP *http.Client
 }
@@ -186,6 +187,11 @@ func NewRouter(deps Deps) http.Handler {
 			APIKey:   deps.APIKey,
 		})
 	}
+
+	// Codex MCP status and thread sync
+	mountCodexMCPRoutes(r, codexMCPDeps{
+		CodexClient: deps.CodexClient,
+	})
 
 	if deps.Skills != nil && deps.SkillFiles != nil {
 		r.Route("/v1/skills", func(r chi.Router) {

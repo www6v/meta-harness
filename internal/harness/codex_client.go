@@ -594,3 +594,248 @@ func (c *CodexClient) attachFilesToEvents(
 func codexWorkdirOutputs(workdir string) string {
 	return filepath.Join(workdir, "outputs")
 }
+
+// ---------------------------------------------------------------------------
+// MCP Status and Thread Sync (Phase 2)
+// ---------------------------------------------------------------------------
+
+// MCPServerStatus represents a Codex MCP server's status.
+type MCPServerStatus struct {
+	Name   string `json:"name"`
+	Status string `json:"status"` // connected | disconnected | error
+	Error  string `json:"error,omitempty"`
+}
+
+// CodexThread represents a Codex thread.
+type CodexThread struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
+// ListMCPServerStatus calls Codex's mcpServerStatus/list via the bridge.
+func (c *CodexClient) ListMCPServerStatus(
+	ctx context.Context,
+	sessionID string,
+) ([]MCPServerStatus, error) {
+	body, err := json.Marshal(map[string]any{
+		"session_id": sessionID,
+		"method":     "mcpServerStatus/list",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("codex marshal mcp status: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(
+		ctx, http.MethodPost,
+		c.BridgeURL+"/codex/rpc",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("codex build mcp status request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient().Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("codex bridge mcp status: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("codex read mcp status: %w", err)
+	}
+
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("codex bridge mcp status=%d: %s", resp.StatusCode, string(raw))
+	}
+
+	var result struct {
+		Result struct {
+			Servers []MCPServerStatus `json:"servers"`
+		} `json:"result"`
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("codex decode mcp status: %w", err)
+	}
+	if result.Error != nil {
+		return nil, fmt.Errorf("codex mcp status error: %s", result.Error.Message)
+	}
+
+	return result.Result.Servers, nil
+}
+
+// ReloadMCPServers calls Codex's config/mcpServer/reload via the bridge.
+func (c *CodexClient) ReloadMCPServers(
+	ctx context.Context,
+	sessionID string,
+) error {
+	body, err := json.Marshal(map[string]any{
+		"session_id": sessionID,
+		"method":     "config/mcpServer/reload",
+	})
+	if err != nil {
+		return fmt.Errorf("codex marshal reload: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(
+		ctx, http.MethodPost,
+		c.BridgeURL+"/codex/rpc",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return fmt.Errorf("codex build reload request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient().Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("codex bridge reload: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("codex read reload: %w", err)
+	}
+
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("codex bridge reload=%d: %s", resp.StatusCode, string(raw))
+	}
+
+	var result struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return fmt.Errorf("codex decode reload: %w", err)
+	}
+	if result.Error != nil {
+		return fmt.Errorf("codex reload error: %s", result.Error.Message)
+	}
+
+	return nil
+}
+
+// ListThreads calls Codex's thread/list via the bridge.
+func (c *CodexClient) ListThreads(
+	ctx context.Context,
+	sessionID string,
+) ([]CodexThread, error) {
+	body, err := json.Marshal(map[string]any{
+		"session_id": sessionID,
+		"method":     "thread/list",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("codex marshal threads: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(
+		ctx, http.MethodPost,
+		c.BridgeURL+"/codex/rpc",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("codex build threads request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient().Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("codex bridge threads: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("codex read threads: %w", err)
+	}
+
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("codex bridge threads=%d: %s", resp.StatusCode, string(raw))
+	}
+
+	var result struct {
+		Result struct {
+			Threads []CodexThread `json:"threads"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("codex decode threads: %w", err)
+	}
+	if result.Error != nil {
+		return nil, fmt.Errorf("codex threads error: %s", result.Error.Message)
+	}
+
+	return result.Result.Threads, nil
+}
+
+// ReadThread calls Codex's thread/read via the bridge.
+func (c *CodexClient) ReadThread(
+	ctx context.Context,
+	sessionID, threadID string,
+) (*CodexThread, error) {
+	body, err := json.Marshal(map[string]any{
+		"session_id": sessionID,
+		"method":     "thread/read",
+		"params": map[string]any{
+			"thread_id": threadID,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("codex marshal thread read: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(
+		ctx, http.MethodPost,
+		c.BridgeURL+"/codex/rpc",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("codex build thread read request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient().Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("codex bridge thread read: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("codex read thread: %w", err)
+	}
+
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("codex bridge thread=%d: %s", resp.StatusCode, string(raw))
+	}
+
+	var result struct {
+		Result struct {
+			Thread CodexThread `json:"thread"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("codex decode thread: %w", err)
+	}
+	if result.Error != nil {
+		return nil, fmt.Errorf("codex thread error: %s", result.Error.Message)
+	}
+
+	return &result.Result.Thread, nil
+}
