@@ -1,4 +1,4 @@
-﻿"""OMA bootstrap for workflow executions.
+"""OMA bootstrap for workflow executions.
 
 Creates workers + coordinator agents and a session on the OMA platform via
 ``sdk``, then configures ``SubAgentRuntime`` so workflow agent() steps

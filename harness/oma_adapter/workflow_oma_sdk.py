@@ -1,4 +1,4 @@
-﻿"""OMA platform Python SDK availability check.
+"""OMA platform Python SDK availability check.
 
 The OMA SDK (``sdk``) is the supported way for the workflow bootstrap
 to create agent/session records on the OMA platform. This module isolates

@@ -1,4 +1,4 @@
-﻿# Gate HITL — GT1–GT3 迁移清单
+# Gate HITL — GT1–GT3 迁移清单
 
 > **目标：** 将 Anthropic cookbook `CMA_gate_human_in_the_loop.ipynb` 所需的 custom-tool HITL 能力从 [open-managed-agents](https://github.com/anthropics/claude-cookbooks/tree/main/managed_agents) 移植到 `meta-harness`。
 >

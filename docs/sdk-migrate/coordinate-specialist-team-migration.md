@@ -1,4 +1,4 @@
-﻿# Coordinate specialist team migration
+# Coordinate specialist team migration
 
 > **Source:** Anthropic `managed_agents/CMA_coordinate_specialist_team.ipynb`  
 > **Target:** `sdk/example/example5/` + Go `TestCoordinateCookbook*`  

@@ -1,4 +1,4 @@
-﻿# Cookbook ↔ OMA 对齐 — 工程评审报告
+# Cookbook ↔ OMA 对齐 — 工程评审报告
 
 > **目标：** 不是让 `data_analyst_agent.py`「能跑」，而是与 Anthropic cookbook notebook
 > (`managed_agents/data_analyst_agent.ipynb`) **API 与语义一致**，使示例成为 parity

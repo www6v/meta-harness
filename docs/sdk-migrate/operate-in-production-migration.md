@@ -1,4 +1,4 @@
-﻿# Operate in production migration
+# Operate in production migration
 
 > **Source:** Anthropic `managed_agents/CMA_operate_in_production.ipynb`  
 > **Reference:** `@open-managed-agents` vault + MCP injection (no outbound `beta.webhooks`)  
