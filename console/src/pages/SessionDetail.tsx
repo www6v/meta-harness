@@ -10,7 +10,6 @@ import { Modal } from "../components/Modal";
 import { Button } from "@/components/ui/button";
 import { AgentIcon, ClockIcon, DurationIcon, EnvIcon, VaultIcon } from "../components/icons";
 import { FilesPanel, ResourcePanel } from "./session-detail/Panels";
-import { CodexIntegrationPanel } from "../components/CodexIntegrationPanel";
 import { HitlActionPanel } from "./session-detail/HitlActionPanel";
 import { TranscriptTab } from "./session-detail/TranscriptTab";
 import { DebugTab } from "./session-detail/DebugTab";
@@ -69,7 +68,7 @@ import {
 import { CodeBlock } from "../components/ai-elements/code-block";
 import { DeepSeekRpcClient } from "../lib/deepseek-rpc-client";
 
-type View = "transcript" | "debug" | "timeline" | "team" | "chat" | "codex";
+type View = "transcript" | "debug" | "timeline" | "team" | "chat";
 
 /** A user.* event sitting in the server-side pending_events queue.
  *  Maintained client-side via system.user_message_pending /
@@ -1232,72 +1231,6 @@ export function SessionDetail() {
           onClick={() => setView("team")}
         />
         <ViewTab
-          label="Codex"
-          active={view === "codex"}
-          onClick={() => setView("codex")}
-        />
-        {(view === "timeline" || view === "debug") && (
-          <span className="ml-auto text-xs text-fg-subtle font-mono">{events.length} events</span>
-        )}
-        {/* Trajectory viewer trigger — pushed to the right edge of the tab
-            row. Disabled until the lazy fetch resolves so the click never
-            opens an empty modal. Errors keep the button enabled (the modal
-            shows the error). */}
-        <button
-          onClick={() => setShowTrajectory(true)}
-          disabled={trajectory === undefined || trajectory === "loading"}
-          className={`${view === "timeline" ? "ml-3" : "ml-auto"} inline-flex items-center min-h-11 sm:min-h-0 text-xs text-fg-muted hover:text-fg disabled:opacity-40 disabled:cursor-not-allowed bg-bg-surface/60 hover:bg-bg-surface rounded px-2 py-1 transition-colors duration-[var(--dur-quick)] ease-[var(--ease-soft)] my-1.5`}
-          title={
-            trajectory === "loading"
-              ? "Loading trajectory…"
-              : trajectory === "error"
-              ? "Trajectory unavailable — click to inspect error"
-              : "View raw Trajectory v1 envelope"
-          }
-        >
-          Trajectory
-        </button>
-      </div>
-
-      {/* Linear context (when triggered by a Linear webhook) */}
-      {linear && (
-        <div className="pl-3 pr-4 py-2 bg-info-subtle text-xs flex items-center gap-2 text-info">
-          <span>🔗</span>
-          <span className="font-medium">Linear</span>
-          <span className="opacity-60">·</span>
-          <span>
-            issue{" "}
-            <span className="font-mono">{linear.issueIdentifier ?? linear.issueId}</span>
-          </span>
-          {linear.workspaceId && (
-            <a
-              href={`https://linear.app`}
-              target="_blank"
-              rel="noreferrer"
-              className="ml-auto hover:underline"
-            >
-              Open in Linear ↗
-            </a>
-          )}
-        </div>
-      )}
-
-      {/* Slack context (when triggered by a Slack event) */}
-      {slack && (
-        <div className="pl-3 pr-4 py-2 bg-accent-violet-subtle text-xs flex items-center gap-2 text-accent-violet flex-wrap">
-          <span>💬</span>
-          <span className="font-medium">Slack</span>
-          <span className="opacity-60">·</span>
-          <span>
-            {slack.channelId ? (
-              slack.workspaceId ? (
-                <a
-                  href={`slack://channel?team=${slack.workspaceId}&id=${slack.channelId}`}
-                  className="font-mono underline hover:no-underline"
-                  title="Open in Slack desktop"
-                >
-                  channel {slack.channelId} ↗
-                </a>
               ) : (
                 <>
                   channel <span className="font-mono">{slack.channelId}</span>
@@ -1358,11 +1291,6 @@ export function SessionDetail() {
           sending={sending}
           sessionId={id}
         />
-      ) : view === "codex" ? (
-        id ? (
-          <div className="p-4">
-            <CodexIntegrationPanel sessionId={id} />
-          </div>
         ) : null
       ) : view === "debug" ? (
         <DebugTab
