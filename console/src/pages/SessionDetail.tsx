@@ -10,6 +10,7 @@ import { Modal } from "../components/Modal";
 import { Button } from "@/components/ui/button";
 import { AgentIcon, ClockIcon, DurationIcon, EnvIcon, VaultIcon } from "../components/icons";
 import { FilesPanel, ResourcePanel } from "./session-detail/Panels";
+import { CodexIntegrationPanel } from "../components/CodexIntegrationPanel";
 import { HitlActionPanel } from "./session-detail/HitlActionPanel";
 import { TranscriptTab } from "./session-detail/TranscriptTab";
 import { DebugTab } from "./session-detail/DebugTab";
@@ -68,7 +69,7 @@ import {
 import { CodeBlock } from "../components/ai-elements/code-block";
 import { DeepSeekRpcClient } from "../lib/deepseek-rpc-client";
 
-type View = "transcript" | "debug" | "timeline" | "team" | "chat";
+type View = "transcript" | "debug" | "timeline" | "team" | "chat" | "codex";
 
 /** A user.* event sitting in the server-side pending_events queue.
  *  Maintained client-side via system.user_message_pending /
@@ -1230,6 +1231,11 @@ export function SessionDetail() {
           active={view === "team"}
           onClick={() => setView("team")}
         />
+        <ViewTab
+          label="Codex"
+          active={view === "codex"}
+          onClick={() => setView("codex")}
+        />
         {(view === "timeline" || view === "debug") && (
           <span className="ml-auto text-xs text-fg-subtle font-mono">{events.length} events</span>
         )}
@@ -1352,6 +1358,12 @@ export function SessionDetail() {
           sending={sending}
           sessionId={id}
         />
+      ) : view === "codex" ? (
+        id ? (
+          <div className="p-4">
+            <CodexIntegrationPanel sessionId={id} />
+          </div>
+        ) : null
       ) : view === "debug" ? (
         <DebugTab
           events={events}
