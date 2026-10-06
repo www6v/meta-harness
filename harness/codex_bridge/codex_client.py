@@ -392,6 +392,8 @@ class CodexClient:
                 else:
                     result.terminal_state = str(status)
                 # Pull final content from turn.items as a safety net.
+                # Also generate tool events for commandExecution/mcpToolCall/fileChange
+                # items so the Transcript and Debug tabs display tool calls.
                 for item in turn.get("items", []):
                     itype = item.get("type")
                     if itype == "agentMessage":
@@ -404,6 +406,25 @@ class CodexClient:
                             if isinstance(s, str) and s:
                                 accumulated_reasoning.append(s)
                                 emitted_thinking = True
+                    elif itype in ("commandExecution", "fileChange", "mcpToolCall"):
+                        # Generate tool_use event
+                        tool_event = _item_started_to_tool_use(item)
+                        if tool_event is not None:
+                            tool_use_id = tool_event.get("id")
+                            result.events.append(tool_event)
+                            await _invoke(on_event, tool_event)
+                            # Generate matching tool_result event with same ID for pairing
+                            tool_result = _item_completed_to_tool_result(item)
+                            if tool_result is not None:
+                                # Use the same ID as tool_use for pairing
+                                tool_result["id"] = tool_use_id
+                                # Add tool_use_id field for frontend pairing
+                                if itype == "mcpToolCall":
+                                    tool_result["mcp_tool_use_id"] = tool_use_id
+                                else:
+                                    tool_result["tool_use_id"] = tool_use_id
+                                result.events.append(tool_result)
+                                await _invoke(on_event, tool_result)
                 break
 
             elif method == "turn/started":
