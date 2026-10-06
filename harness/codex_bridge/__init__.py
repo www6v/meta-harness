@@ -1,11 +1,7 @@
-"""Codex Bridge - HTTP to WebSocket bridge for Codex app-server.
-
-This module provides a FastAPI service that translates HTTP requests
-from the Go meta-harness server into WebSocket JSON-RPC calls to the
-Codex app-server.
-"""
+"""Codex Bridge - HTTP to WebSocket bridge for Codex app-server."""
 
 from .codex_bridge import app
-from .config_merger import MCPConfigMerger
+from .codex_client import CodexClient, CodexConfig
+from .codex_tunnel import SSHTunnel
 
-__all__ = ["app", "MCPConfigMerger"]
+__all__ = ["app", "CodexClient", "CodexConfig", "SSHTunnel"]

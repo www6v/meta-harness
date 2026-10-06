@@ -1,19 +1,31 @@
-"""Codex Bridge — HTTP → WebSocket bridge for Codex app-server.
+"""HTTP bridge for the Codex app-server.
 
-Exposes FastAPI HTTP endpoints that the meta-harness Go server calls.
-Internally maintains a WebSocket connection to the Codex app-server
-(real or mock) and relays JSON-RPC calls.
+Runs a small HTTP server that exposes a single ``POST /codex/turn``
+endpoint. The Go ``internal/harness/codex_client.go`` calls this
+endpoint with an OMA-shaped TurnRequest and receives a TurnResponse
+(a list of OMA events + usage).
 
-Endpoints:
-    GET  /health         — Bridge health check
-    POST /codex/rpc      — Generic JSON-RPC call (mcpServerStatus/list, etc.)
-    POST /codex/turn     — Execute a turn (batch, returns events at end)
-    POST /codex/turn/sse — Execute a turn with SSE streaming
+The bridge:
+  - Accepts the turn request (session_id, agent, events...)
+  - Opens an SSH tunnel if ``CODEX_SSH_HOST`` is set, otherwise
+    connects directly to ``CODEX_WS_URL`` (default ws://127.0.0.1:5432)
+  - Calls :class:`codex_client.CodexClient.run_turn`
+  - Returns the resulting events
 
-Environment:
-    CODEX_WS_URL   — WebSocket URL for Codex app-server (default: ws://127.0.0.1:8765)
-    CODEX_WS_TOKEN — Bearer token for WebSocket auth (optional)
-    CODEX_BRIDGE_PORT — HTTP port for this bridge (default: 8092)
+Environment variables:
+    CODEX_WS_URL         WebSocket URL (default ws://127.0.0.1:5432)
+    CODEX_WS_TOKEN       Bearer token (optional)
+    CODEX_SSH_HOST       SSH host to tunnel through (optional)
+    CODEX_SSH_USER       SSH user (default root)
+    CODEX_SSH_PASSWORD   SSH password (optional)
+    CODEX_SSH_PORT       SSH port (default 22)
+    CODEX_REMOTE_PORT    Remote WS port when tunneling (default 5432)
+    CODEX_LISTEN         Bridge listen address (default 127.0.0.1:8092)
+    CODEX_TURN_TIMEOUT   Per-turn timeout in seconds (default 300)
+    CODEX_MODEL          Model label surfaced in usage events (default codex)
+
+Run:
+    python codex_bridge.py
 """
 
 from __future__ import annotations
@@ -22,678 +34,722 @@ import asyncio
 import json
 import logging
 import os
+import queue
+import sys
+import threading
 import time
-import uuid
-from contextlib import asynccontextmanager
-from typing import Any, Dict, Optional
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any, Optional
 
-import httpx
-import websockets
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
-
-# Support both direct execution and module import
 try:
-    from .config_merger import MCPConfigMerger
+    from .codex_client import CodexClient, CodexConfig
+    from .codex_tunnel import SSHTunnel
 except ImportError:
-    from config_merger import MCPConfigMerger
-
-logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-CODEX_WS_URL = os.environ.get("CODEX_WS_URL", "ws://127.0.0.1:8765")
-CODEX_WS_TOKEN = os.environ.get("CODEX_WS_TOKEN")
-BRIDGE_PORT = int(os.environ.get("CODEX_BRIDGE_PORT", "8092"))
-
-# ---------------------------------------------------------------------------
-# Models
-# ---------------------------------------------------------------------------
-
-class RPCRequest(BaseModel):
-    session_id: str
-    method: str
-    params: Optional[Dict[str, Any]] = None
+    # Allow running directly as `python codex_bridge.py`
+    from codex_client import CodexClient, CodexConfig
+    from codex_tunnel import SSHTunnel
 
 
-class TurnRequest(BaseModel):
-    session_id: str
-    agent: Optional[Dict[str, Any]] = None
-    events: Optional[list] = None
-    skills: Optional[list] = None
-    sub_agents: Optional[list] = None
-    tenant_mcp_servers: Optional[list] = None
+logger = logging.getLogger("codex.bridge")
 
 
 # ---------------------------------------------------------------------------
-# Codex WebSocket Client
+# Config
 # ---------------------------------------------------------------------------
 
-class CodexWSClient:
-    """Manages a WebSocket connection to the Codex app-server.
 
-    Handles:
-    - Connection lifecycle with auto-reconnect
-    - JSON-RPC request/response correlation
-    - ServerRequest auto-response (approval requests, etc.)
-    - Notification collection during turns
-    """
-
-    def __init__(self, ws_url: str, token: Optional[str] = None):
-        self._ws_url = ws_url
-        self._token = token
-        self._ws = None
-        self._pending: Dict[int, asyncio.Future] = {}
-        self._next_id = 1
-        self._recv_task: Optional[asyncio.Task] = None
-        self._connected = False
-        self._notifications: list = []
-
-    async def connect(self) -> None:
-        """Establish WebSocket connection and run initialize handshake."""
-        extra_headers = {}
-        if self._token:
-            extra_headers["Authorization"] = f"Bearer {self._token}"
-
-        logger.info("connecting to Codex app-server at %s", self._ws_url)
-        self._ws = await websockets.connect(
-            self._ws_url,
-            additional_headers=extra_headers,
-            ping_interval=30,
-            ping_timeout=10,
-        )
-        self._connected = True
-        self._recv_task = asyncio.create_task(self._recv_loop())
-
-        # Initialize handshake
-        result = await self.call("initialize", {
-            "clientInfo": {"name": "codex-bridge", "version": "0.1.0"},
-            "capabilities": {},
-        })
-        logger.info("initialized: %s", result.get("serverInfo", {}))
-
-    async def close(self) -> None:
-        self._connected = False
-        if self._recv_task:
-            self._recv_task.cancel()
-            try:
-                await self._recv_task
-            except asyncio.CancelledError:
-                pass
-        if self._ws:
-            await self._ws.close()
-
-    async def _recv_loop(self) -> None:
-        """Receive messages and route to pending futures or notification list."""
-        try:
-            async for raw in self._ws:
-                msg = json.loads(raw)
-
-                # JSON-RPC response (has id)
-                if "id" in msg:
-                    req_id = msg["id"]
-                    future = self._pending.pop(req_id, None)
-                    if future and not future.done():
-                        if "error" in msg:
-                            future.set_exception(
-                                CodexRPCError(
-                                    msg["error"].get("code", -1),
-                                    msg["error"].get("message", "unknown"),
-                                )
-                            )
-                        else:
-                            future.set_result(msg.get("result", {}))
-                    continue
-
-                # JSON-RPC notification (no id, has method)
-                method = msg.get("method", "")
-                params = msg.get("params", {})
-
-                # Handle ServerRequests (server asking client for input)
-                if method.endswith("/requestApproval") or method.endswith("/request"):
-                    await self._handle_server_request(msg)
-                    continue
-
-                # Collect other notifications
-                self._notifications.append(msg)
-                logger.debug("notification: %s", method)
-
-        except websockets.ConnectionClosed:
-            logger.warning("WebSocket connection closed")
-            self._connected = False
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.exception("recv loop error")
-            self._connected = False
-
-    async def _handle_server_request(self, msg: Dict) -> None:
-        """Auto-respond to Codex server requests (approvals, elicitation, MCP tool calls)."""
-        req_id = msg.get("id")
-        method = msg.get("method", "")
-        if req_id is None:
-            return
-
-        # Auto-decline all approval requests (unattended mode)
-        if "requestApproval" in method:
-            response = {"decision": "decline"}
-        elif method == "mcpServer/elicitation/request":
-            response = {"action": "decline", "content": None}
-        elif method == "item/tool/requestUserInput":
-            response = {"answers": {}}
-        elif method == "mcpServer/tool/call":
-            # Handle MCP tool call requests
-            params = msg.get("params", {})
-            server_name = params.get("server", "")
-            tool_name = params.get("tool", "")
-            arguments = params.get("arguments", {})
-            logger.info("MCP tool call request: server=%s tool=%s", server_name, tool_name)
-
-            # For now, return a stub response - actual MCP execution would
-            # require calling the MCP server's tool endpoint
-            response = {
-                "content": [{"type": "text", "text": f"MCP tool {server_name}/{tool_name} called"}],
-                "isError": False,
-            }
-        else:
-            response = {}
-
-        resp_msg = {"jsonrpc": "2.0", "id": req_id, "result": response}
-        await self._ws.send(json.dumps(resp_msg))
-        logger.debug("auto-responded to %s: %s", method, response)
-
-    async def call(self, method: str, params: Optional[Dict] = None, timeout: float = 30) -> Dict:
-        """Send a JSON-RPC request and wait for the response."""
-        if not self._connected or self._ws is None:
-            raise ConnectionError("Not connected to Codex app-server")
-
-        req_id = self._next_id
-        self._next_id += 1
-
-        request = {
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "method": method,
-            "params": params or {},
-        }
-
-        future: asyncio.Future = asyncio.get_event_loop().create_future()
-        self._pending[req_id] = future
-
-        await self._ws.send(json.dumps(request))
-        logger.debug("→ %s (id=%d)", method, req_id)
-
-        try:
-            result = await asyncio.wait_for(future, timeout=timeout)
-            logger.debug("← %s (id=%d) result=%s", method, req_id, json.dumps(result)[:500])
-            return result
-        except asyncio.TimeoutError:
-            self._pending.pop(req_id, None)
-            raise TimeoutError(f"Codex RPC timeout: {method}")
-
-    def drain_notifications(self) -> list:
-        """Return and clear accumulated notifications."""
-        msgs = self._notifications[:]
-        self._notifications.clear()
-        return msgs
-
-    @property
-    def connected(self) -> bool:
-        return self._connected
-
-
-class CodexRPCError(Exception):
-    def __init__(self, code: int, message: str):
-        self.code = code
-        self.message = message
-        super().__init__(f"Codex RPC error {code}: {message}")
-
-
-# ---------------------------------------------------------------------------
-# Global state
-# ---------------------------------------------------------------------------
-
-_client: Optional[CodexWSClient] = None
-_config_merger: Optional[MCPConfigMerger] = None
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Startup/shutdown: connect to Codex, initialize config merger."""
-    global _client, _config_merger
-
-    _config_merger = MCPConfigMerger()
-    _client = CodexWSClient(CODEX_WS_URL, CODEX_WS_TOKEN)
-
-    try:
-        await _client.connect()
-        logger.info("bridge connected to Codex app-server")
-    except Exception as e:
-        logger.error("failed to connect to Codex: %s", e)
-        # Don't crash — let health check report the failure
-        _client = None
-
-    yield
-
-    if _client:
-        await _client.close()
-    logger.info("bridge shutdown complete")
-
-
-app = FastAPI(title="Codex Bridge", lifespan=lifespan)
-
-
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
-
-@app.get("/health")
-async def health():
-    connected = _client is not None and _client.connected
+def _config_from_env() -> dict[str, Any]:
     return {
-        "status": "ok" if connected else "degraded",
-        "codex_connected": connected,
-        "codex_ws_url": CODEX_WS_URL,
+        "ws_url": os.environ.get("CODEX_WS_URL", "ws://127.0.0.1:8765"),
+        "token": os.environ.get("CODEX_WS_TOKEN"),
+        "ssh_host": os.environ.get("CODEX_SSH_HOST"),
+        "ssh_user": os.environ.get("CODEX_SSH_USER", "root"),
+        "ssh_password": os.environ.get("CODEX_SSH_PASSWORD"),
+        "ssh_port": int(os.environ.get("CODEX_SSH_PORT", "22")),
+        "remote_port": int(os.environ.get("CODEX_REMOTE_PORT", "8765")),
+        "listen": os.environ.get("CODEX_LISTEN", "127.0.0.1:8092"),
+        "turn_timeout": float(os.environ.get("CODEX_TURN_TIMEOUT", "300")),
+        "model": os.environ.get("CODEX_MODEL", "codex"),
     }
 
 
-@app.post("/codex/rpc")
-async def codex_rpc(req: RPCRequest):
-    """Generic JSON-RPC passthrough to the Codex app-server."""
-    if not _client or not _client.connected:
-        raise HTTPException(status_code=503, detail="Not connected to Codex")
-
-    try:
-        result = await _client.call(req.method, req.params)
-        return {"result": result}
-    except CodexRPCError as e:
-        return {"error": {"code": e.code, "message": e.message}}
-    except Exception as e:
-        logger.exception("RPC call failed: %s", req.method)
-        return {"error": {"code": -1, "message": str(e)}}
+# ---------------------------------------------------------------------------
+# Connection pool
+# ---------------------------------------------------------------------------
 
 
-@app.post("/codex/turn")
-async def codex_turn(req: TurnRequest):
-    """Execute a turn against Codex. Returns batch events at end."""
-    if not _client or not _client.connected:
-        raise HTTPException(status_code=503, detail="Not connected to Codex")
+class _ConnPool:
+    """Shared CodexClient with a single event loop and SSH tunnel.
 
-    start = time.monotonic()
+    A single WebSocket connection to the codex app-server is shared across
+    all OMA sessions. Each session gets its own codex thread (thread_id is
+    reset when a new session_id is seen), so conversation state stays
+    isolated per session while avoiding multiple WS connections.
+    """
 
-    try:
-        # Extract the latest user message from events
-        user_text = _extract_user_message(req.events)
+    def __init__(self, cfg: dict[str, Any]) -> None:
+        self.cfg = cfg
+        self._lock = threading.Lock()
+        self._tunnel: Optional[SSHTunnel] = None
+        self._client: Optional[CodexClient] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._thread: Optional[threading.Thread] = None
+        # Track which session_id the current thread_id belongs to.
+        self._active_session: Optional[str] = None
 
-        # Register MCP servers if provided
-        if req.tenant_mcp_servers:
-            await _register_mcp_servers(req.tenant_mcp_servers)
+    def resolve_ws_url(self) -> str:
+        if self.cfg.get("ssh_host"):
+            if self._tunnel is None:
+                self._tunnel = SSHTunnel(
+                    ssh_host=self.cfg["ssh_host"],
+                    ssh_user=self.cfg["ssh_user"],
+                    ssh_password=self.cfg["ssh_password"],
+                    ssh_port=self.cfg["ssh_port"],
+                    remote_port=self.cfg["remote_port"],
+                )
+                self._tunnel.start()
+            return self._tunnel.local_url
+        return self.cfg["ws_url"]
 
-        # Start or reuse a thread
-        thread_id = await _start_thread(req.session_id, user_text)
-
-        # Start the turn
-        # Codex expects input as a list of content blocks, not a plain string
-        # If user_text is empty, use a fallback to avoid sending empty input
-        if user_text:
-            input_blocks = [{"type": "text", "text": user_text}]
-        else:
-            # Fallback: extract any text from events or use a default
-            input_blocks = [{"type": "text", "text": "hello"}]
-            logger.warning("empty user message, using fallback for session %s", req.session_id)
-
-        turn_result = await _client.call("turn/start", {
-            "threadId": thread_id,
-            "input": input_blocks,
-        })
-
-        logger.debug("turn/start response: %s", json.dumps(turn_result)[:500])
-
-        # Extract turn ID - Codex returns it in result.turn.id
-        turn_id = (
-            turn_result.get("turnId")
-            or turn_result.get("turn_id")
-            or turn_result.get("id")
-        )
-        if not turn_id and isinstance(turn_result.get("turn"), dict):
-            turn_id = turn_result["turn"].get("id")
-
-        if not turn_id:
-            raise RuntimeError(f"Codex turn/start returned no turn ID: {turn_result}")
-
-        # Wait for turn completion (collect notifications)
-        events = await _wait_for_turn_completion(turn_id, timeout=300)
-
-        duration = time.monotonic() - start
-        logger.info(
-            "turn completed: session=%s thread=%s turn=%s events=%d duration=%.1fs",
-            req.session_id, thread_id, turn_id, len(events), duration,
-        )
-
-        return {
-            "events": events,
-            "files": [],
-            "usage": {"input_tokens": 0, "output_tokens": 0},
-        }
-
-    except Exception as e:
-        logger.exception("turn failed: session=%s", req.session_id)
-        return {
-            "events": [],
-            "files": [],
-            "error": {"message": str(e)},
-        }
-
-
-@app.post("/codex/turn/sse")
-async def codex_turn_sse(req: TurnRequest):
-    """Execute a turn with SSE streaming. Returns events as they arrive."""
-    if not _client or not _client.connected:
-        raise HTTPException(status_code=503, detail="Not connected to Codex")
-
-    async def event_stream():
-        try:
-            user_text = _extract_user_message(req.events)
-
-            # Register MCP servers if provided
-            if req.tenant_mcp_servers:
-                await _register_mcp_servers(req.tenant_mcp_servers)
-
-            thread_id = await _start_thread(req.session_id, user_text)
-
-            # Codex expects input as a list of content blocks, not a plain string
-            # If user_text is empty, use a fallback to avoid sending empty input
-            if user_text:
-                input_blocks = [{"type": "text", "text": user_text}]
-            else:
-                input_blocks = [{"type": "text", "text": "hello"}]
-                logger.warning("empty user message, using fallback for session %s", req.session_id)
-
-            turn_result = await _client.call("turn/start", {
-                "threadId": thread_id,
-                "input": input_blocks,
-            })
-
-            logger.debug("turn/start response: %s", json.dumps(turn_result)[:500])
-
-            # Extract turn ID - Codex returns it in result.turn.id
-            turn_id = (
-                turn_result.get("turnId")
-                or turn_result.get("turn_id")
-                or turn_result.get("id")
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        if self._loop is None or not self._loop.is_running():
+            self._loop = asyncio.new_event_loop()
+            self._thread = threading.Thread(
+                target=self._loop.run_forever,
+                name="codex-loop",
+                daemon=True,
             )
-            if not turn_id and isinstance(turn_result.get("turn"), dict):
-                turn_id = turn_result["turn"].get("id")
+            self._thread.start()
+        return self._loop
 
-            # Stream events as they come
-            if turn_id:
-                async for event in _stream_turn_events(turn_id):
-                    yield f"data: {json.dumps(event)}\n\n"
+    def _ensure_client(self) -> CodexClient:
+        if self._client is None:
+            ws_url = self.resolve_ws_url()
+            self._client = CodexClient(
+                CodexConfig(
+                    ws_url=ws_url,
+                    token=self.cfg.get("token"),
+                    model=self.cfg.get("model", "codex"),
+                    turn_timeout=self.cfg.get("turn_timeout", 300.0),
+                )
+            )
+        return self._client
 
-            yield "data: {\"type\": \"done\"}\n\n"
+    def get_or_create(self, session_id: str) -> tuple[CodexClient, asyncio.AbstractEventLoop]:
+        """Return (client, loop) for the given session.
 
-        except Exception as e:
-            error_event = {"type": "error", "message": str(e)}
-            yield f"data: {json.dumps(error_event)}\n\n"
+        A single CodexClient + event loop is shared. When a new session_id
+        is seen, the client's thread_id is reset so a fresh codex thread
+        is created on the next turn.
+        """
+        with self._lock:
+            loop = self._ensure_loop()
+            client = self._ensure_client()
+            if session_id != self._active_session:
+                # New session → reset thread state so a new codex thread
+                # is created with the session's own instructions/skills.
+                # Do NOT reset _initialized — initialize is per-connection.
+                client._thread_id = None
+                self._active_session = session_id
+                logger.info("codex pool switched to session=%s", session_id)
+            return client, loop
 
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    def run(self, session_id: str, coro) -> Any:
+        """Run a coroutine on the shared loop and return the result."""
+        _, loop = self.get_or_create(session_id)
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result(timeout=self.cfg.get("turn_timeout", 300.0) + 30)
+
+    def close(self, session_id: str) -> None:
+        """No-op for API compat — shared client is kept alive."""
+        pass
+
+    def shutdown(self) -> None:
+        with self._lock:
+            client = self._client
+            loop = self._loop
+            self._client = None
+            self._loop = None
+            self._thread = None
+            self._active_session = None
+        if client is not None and loop is not None and loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(client.close(), loop).result(
+                    timeout=5.0
+                )
+            except Exception:  # pragma: no cover
+                pass
+            loop.call_soon_threadsafe(loop.stop)
+        if self._tunnel is not None:
+            try:
+                self._tunnel.stop()
+            except Exception:  # pragma: no cover
+                pass
+            self._tunnel = None
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Request mapping
 # ---------------------------------------------------------------------------
 
-async def _register_mcp_servers(servers: list) -> None:
-    """Register MCP servers with the Codex app-server via config/value/write."""
-    for server in servers or []:
-        name = server.get("name")
-        url = server.get("url")
-        if not name or not url:
-            logger.warning("skipping MCP server with missing name or url: %s", server)
-            continue
 
-        config_value = {
-            "url": url,
-            "type": server.get("type", "url"),
-        }
-        if server.get("authorization_token"):
-            config_value["authorization_token"] = server["authorization_token"]
-
-        try:
-            await _client.call("config/value/write", {
-                "keyPath": f"mcp_servers.{name}",
-                "value": config_value,
-                "mergeStrategy": "replace",
-            })
-            logger.info("registered MCP server: %s -> %s", name, url)
-        except Exception as e:
-            logger.error("failed to register MCP server %s: %s", name, e)
-
-
-async def _handle_mcp_tool_call(params: Dict) -> Dict:
-    """Handle an MCP tool call request from the Codex app-server."""
-    server_name = params.get("server", "")
-    tool_name = params.get("tool", "")
-    arguments = params.get("arguments", {})
-
-    logger.info("MCP tool call: server=%s tool=%s args=%s", server_name, tool_name, json.dumps(arguments)[:200])
-
-    # For now, return a stub response - the actual MCP tool execution
-    # would require calling the MCP server's tool endpoint
-    return {
-        "content": [{"type": "text", "text": f"MCP tool {server_name}/{tool_name} called with {json.dumps(arguments)[:100]}"}],
-        "isError": False,
-    }
-
-
-async def _start_thread(session_id: str, user_text: str) -> str:
-    """Start a Codex thread and return its ID.
-
-    The Codex app-server may return the thread ID in different field names
-    (threadId, thread_id, id, or nested in thread.id), so we check multiple
-    possibilities.
-    
-    IMPORTANT: Use a unique session ID for each thread to avoid caching issues.
-    The Codex app-server returns the same thread for the same sessionId,
-    which causes it to return cached responses.
-    """
-    import uuid
-    # Use a unique session ID to force creation of a new thread
-    unique_session = f"{session_id}-{uuid.uuid4().hex[:8]}"
-    
-    thread_result = await _client.call("thread/start", {
-        "instructions": user_text or "",
-        "sessionId": unique_session,
-    })
-
-    logger.debug("thread/start response: %s", json.dumps(thread_result)[:500])
-
-    # Try multiple field names for thread ID
-    thread_id = (
-        thread_result.get("threadId")
-        or thread_result.get("thread_id")
-        or thread_result.get("id")
-    )
-
-    # Check nested thread.id (real Codex app-server returns {thread: {id: ...}})
-    if not thread_id and isinstance(thread_result.get("thread"), dict):
-        thread_id = thread_result["thread"].get("id")
-
-    if not thread_id:
-        logger.error(
-            "thread/start returned no thread ID. session=%s response=%s",
-            session_id, thread_result
-        )
-        raise RuntimeError(
-            f"Codex thread/start returned no thread ID: {thread_result}"
-        )
-
-    logger.debug("started thread %s for session %s", thread_id, session_id)
-    return thread_id
-
-
-def _extract_user_message(events: Optional[list]) -> str:
-    """Pull the latest user.message text from the events list.
-
-    Handles three event formats:
-    - OMA format: {type: "user.message", content: [{type: "text", text: "..."}]}
-    - Nested OMA: {type: "user.message", data: {content: [{text: "..."}]}}
-    - Simple format: {type: "user.message", content: "..."}
-    """
-    if not events:
-        return ""
+def _extract_prompt(req: dict[str, Any]) -> str:
+    """Pull the latest user.message text from an OMA-shaped TurnRequest."""
+    events = req.get("events", [])
     for ev in reversed(events):
-        if not isinstance(ev, dict) or ev.get("type") != "user.message":
+        if not isinstance(ev, dict):
             continue
-
-        # Try OMA format: content is an array of content blocks at top level
-        # Format: {type: "user.message", content: [{type: "text", text: "..."}]}
-        content = ev.get("content")
-        if isinstance(content, list):
-            texts = []
-            for block in content:
-                if isinstance(block, dict):
-                    # Handle both {type: "text", text: "..."} and {text: "..."}
-                    text = block.get("text", "")
-                    if text:
-                        texts.append(text)
-            result = "".join(texts)
-            if result:
-                return result
-        elif isinstance(content, str) and content:
-            # Simple format: {type: "user.message", content: "..."}
-            return content
-
-        # Try nested OMA format: data.content is an array
-        data = ev.get("data")
-        if isinstance(data, dict):
-            data_content = data.get("content")
-            if isinstance(data_content, list):
-                texts = []
-                for block in data_content:
-                    if isinstance(block, dict):
-                        texts.append(block.get("text", ""))
-                result = "".join(texts)
-                if result:
-                    return result
-            elif isinstance(data_content, str) and data_content:
-                return data_content
-
-        # Try simple text field
-        text = ev.get("text")
-        if isinstance(text, str) and text:
+        if ev.get("type") != "user.message":
+            continue
+        content = ev.get("content") or []
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        text = "".join(parts).strip()
+        if text:
             return text
-
     return ""
 
 
-async def _wait_for_turn_completion(turn_id: str, timeout: float = 300) -> list:
-    """Wait for turn/completed notification and collect events."""
-    events = []
-    deadline = time.monotonic() + timeout
+def _extract_skills(req: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract resolved skill payloads from the TurnRequest.
 
-    while time.monotonic() < deadline:
-        notifications = _client.drain_notifications()
-        for notif in notifications:
-            method = notif.get("method", "")
-            params = notif.get("params", {})
+    Each resolved skill (from ResourceResolver.ResolveSkillsForTurn) has:
+        skill_id, name, display_name, system_prompt_addition, files[]
+    Each file has: filename, content_base64
+    """
+    skills = req.get("skills")
+    if not skills:
+        return []
+    if not isinstance(skills, list):
+        # skills may be a JSON string if double-marshaled
+        if isinstance(skills, (str, bytes)):
+            try:
+                skills = json.loads(skills)
+            except Exception:
+                return []
+    return [s for s in skills if isinstance(s, dict)]
 
-            logger.debug("notification: method=%s params_keys=%s", method, list(params.keys()) if isinstance(params, dict) else type(params).__name__)
 
-            # Agent message deltas — try multiple method names and field names
-            if method in ("item/agentMessage/delta", "item/agentMessage/textDelta",
-                          "turn/agentMessage/delta", "turn/textDelta"):
-                text = (params.get("textDelta") or params.get("text")
-                        or params.get("delta") or params.get("content") or "")
-                if text:
-                    events.append({"type": "agent.message", "content": text})
-            elif method in ("item/reasoning/textDelta", "turn/reasoning/textDelta"):
-                text = params.get("textDelta") or params.get("text") or params.get("delta") or ""
-                if text:
-                    events.append({"type": "agent.thinking", "content": text})
-            elif method in ("turn/completed", "turn/statusChanged", "turn/ended"):
-                status = params.get("status", {})
-                if isinstance(status, dict):
-                    stype = status.get("type", "")
-                else:
-                    stype = str(status)
-                if stype in ("complete", "completed", "idle", "done") or method == "turn/completed":
-                    logger.info("turn %s completed (method=%s status=%s)", turn_id, method, stype)
-                    return events
-            elif method == "error":
+def _extract_sub_agents(req: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract OMA sub_agents from the TurnRequest.
+
+    The Go CodexClient marshals req.SubAgents (map[string]AgentSnapshot)
+    as a JSON object keyed by agent id. We normalise to a list of dicts
+    with id + name + description + system_prompt.
+    """
+    sub = req.get("sub_agents")
+    if not sub:
+        return []
+    if isinstance(sub, (str, bytes)):
+        try:
+            sub = json.loads(sub)
+        except Exception:
+            return []
+    if isinstance(sub, dict):
+        out: list[dict[str, Any]] = []
+        for aid, snap in sub.items():
+            if not isinstance(snap, dict):
+                continue
+            out.append(
+                {
+                    "id": aid,
+                    "name": snap.get("name") or aid,
+                    "description": snap.get("description") or "",
+                    "system_prompt": snap.get("system_prompt") or snap.get("system") or "",
+                }
+            )
+        return out
+    if isinstance(sub, list):
+        return [s for s in sub if isinstance(s, dict)]
+    return []
+
+
+def _inject_sub_agents_info(
+    instructions: Optional[str],
+    sub_agents: list[dict[str, Any]],
+) -> str:
+    """Append a "callable sub-agents" section to the codex instructions.
+
+    The codex model has a native ``spawn_agent`` tool that creates child
+    threads. By describing the available sub-agents in the system prompt,
+    the model can decide when to delegate work to them.
+    """
+    if not sub_agents:
+        return instructions or ""
+    lines = [
+        "",
+        "## Callable Sub-Agents",
+        "",
+        "You can delegate tasks to the following sub-agents by invoking the",
+        "``spawn_agent`` tool. Each sub-agent runs on its own thread and can",
+        "be referenced by its id. Use a sub-agent when its specialty matches",
+        "a subtask — it will run in parallel and report back when done.",
+        "",
+    ]
+    for sa in sub_agents:
+        sid = sa.get("id", "")
+        name = sa.get("name", sid)
+        desc = sa.get("description", "")
+        lines.append(f"- **{name}** (id: ``{sid}``)")
+        if desc:
+            lines.append(f"  {desc}")
+    block = "\n".join(lines)
+    if instructions:
+        return f"{instructions}\n{block}"
+    return block
+
+
+async def _run_explicit_sub_agents(
+    pool: "_ConnPool",
+    session_id: str,
+    sub_agents: list[dict[str, Any]],
+    parent_prompt: str,
+) -> list[dict[str, Any]]:
+    """Run sub-agents explicitly on separate codex connections.
+
+    For each sub-agent, we open a dedicated CodexClient + thread (the
+    shared pool client is reserved for the parent). Each sub-agent turn
+    runs with its own system prompt and a task derived from the parent
+    prompt. We emit OMA sub-agent lifecycle events:
+
+        session.thread_created
+        session.sub_agent_started
+        agent.message (scoped to session_thread_id)
+        session.sub_agent_completed
+        session.thread_idle
+
+    Returns the list of OMA events to prepend to the parent's response.
+    """
+    cfg = pool.cfg
+    ws_url = pool.resolve_ws_url()
+    events: list[dict[str, Any]] = []
+    for sa in sub_agents:
+        sa_id = sa.get("id", "sub_agent")
+        sa_name = sa.get("name", sa_id)
+        sa_system = sa.get("system_prompt") or sa.get("system") or ""
+        # The codex child thread id doubles as the OMA session_thread_id
+        # so the frontend can display the sub-agent's messages in their
+        # own tab.
+        thread_id = f"cx_sub_{sa_id}"
+        # Build the sub-agent's task prompt: inherit the parent prompt
+        # but scope it to the sub-agent's specialty.
+        task_prompt = (
+            f"You are the sub-agent \"{sa_name}\" (id: {sa_id}). "
+            f"The user's overall request is:\n\n{parent_prompt}\n\n"
+            f"Perform the part of this request that matches your role. "
+            f"Respond concisely with your findings or output."
+        )
+        # Lifecycle: created + started.
+        events.append({
+            "type": "session.thread_created",
+            "id": f"evt_{_uuid_hex()}",
+            "session_thread_id": thread_id,
+            "parent_thread_id": "sthr_primary",
+            "agent_name": sa_name,
+        })
+        events.append({
+            "type": "session.sub_agent_started",
+            "id": f"evt_{_uuid_hex()}",
+            "session_thread_id": thread_id,
+            "agent_name": sa_name,
+        })
+        # Run the sub-agent turn on a fresh connection (the shared pool
+        # client is for the parent; running on it would clobber the
+        # parent's thread state).
+        sub_client = CodexClient(
+            CodexConfig(
+                ws_url=ws_url,
+                token=cfg.get("token"),
+                model=cfg.get("model", "codex"),
+                turn_timeout=cfg.get("turn_timeout", 300.0),
+            )
+        )
+        try:
+            sub_result = await sub_client.run_turn(
+                task_prompt,
+                session_id=f"{session_id}_sub_{sa_id}",
+                instructions=sa_system or None,
+            )
+        except Exception as e:
+            logger.warning("codex sub-agent turn failed %s: %s", sa_id, e)
+            events.append({
+                "type": "agent.message",
+                "id": f"evt_{_uuid_hex()}",
+                "session_thread_id": thread_id,
+                "content": [{"type": "text", "text": f"(sub-agent {sa_name} failed: {e})"}],
+            })
+        else:
+            # Map the sub-agent's messages into OMA events scoped to
+            # this sub-agent's thread.
+            if sub_result.final_text:
                 events.append({
-                    "type": "session.error",
-                    "message": params.get("message", "unknown error"),
+                    "type": "agent.message",
+                    "id": f"evt_{_uuid_hex()}",
+                    "session_thread_id": thread_id,
+                    "content": [{"type": "text", "text": sub_result.final_text}],
                 })
-            else:
-                # Catch-all: if the notification has text content, emit it as agent.message
-                text = (params.get("textDelta") or params.get("text")
-                        or params.get("content") or "")
-                if text and "agent" in method.lower():
-                    events.append({"type": "agent.message", "content": text})
-
-        await asyncio.sleep(0.1)
-
+            elif sub_result.events:
+                # Pick up any messages the sub-agent produced.
+                for ev in sub_result.events:
+                    if ev.get("type") == "agent.message":
+                        scoped = dict(ev)
+                        scoped["session_thread_id"] = thread_id
+                        scoped["id"] = f"evt_{_uuid_hex()}"
+                        events.append(scoped)
+            # Include sub-agent tool calls in the parent's event log
+            # (scoped to the sub-agent thread) for the Debug tab.
+            for ev in sub_result.events:
+                if ev.get("type") in ("agent.tool_use", "agent.tool_result"):
+                    scoped = dict(ev)
+                    scoped["session_thread_id"] = thread_id
+                    events.append(scoped)
+        finally:
+            await sub_client.close()
+        # Lifecycle: completed + idle.
+        events.append({
+            "type": "session.sub_agent_completed",
+            "id": f"evt_{_uuid_hex()}",
+            "session_thread_id": thread_id,
+        })
+        events.append({
+            "type": "session.thread_idle",
+            "id": f"evt_{_uuid_hex()}",
+            "session_thread_id": thread_id,
+        })
     return events
 
 
-async def _stream_turn_events(turn_id: str):
-    """Yield events as SSE frames during a turn."""
-    deadline = time.monotonic() + 300
+def _uuid_hex() -> str:
+    import uuid as _uuid
+    return _uuid.uuid4().hex[:16]
 
-    while time.monotonic() < deadline:
-        notifications = _client.drain_notifications()
-        for notif in notifications:
-            method = notif.get("method", "")
-            params = notif.get("params", {})
 
-            logger.debug("notification: method=%s params_keys=%s", method, list(params.keys()) if isinstance(params, dict) else type(params).__name__)
-
-            # Agent message deltas — try multiple method names and field names
-            if method in ("item/agentMessage/delta", "item/agentMessage/textDelta",
-                          "turn/agentMessage/delta", "turn/textDelta"):
-                text = (params.get("textDelta") or params.get("text")
-                        or params.get("delta") or params.get("content") or "")
-                if text:
-                    yield {"type": "agent.message", "content": text}
-            elif method in ("item/reasoning/textDelta", "turn/reasoning/textDelta"):
-                text = params.get("textDelta") or params.get("text") or params.get("delta") or ""
-                if text:
-                    yield {"type": "agent.thinking", "content": text}
-            elif method in ("turn/completed", "turn/statusChanged", "turn/ended"):
-                status = params.get("status", {})
-                if isinstance(status, dict):
-                    stype = status.get("type", "")
-                else:
-                    stype = str(status)
-                # Only end on completed/idle/complete status
-                if stype in ("complete", "completed", "idle", "done") or method == "turn/completed":
-                    logger.info("turn %s completed (method=%s status=%s)", turn_id, method, stype)
-                    return
-            elif method == "error":
-                yield {"type": "session.error", "message": params.get("message", "")}
-            else:
-                # Catch-all: if the notification has text content, emit it as agent.message
-                text = (params.get("textDelta") or params.get("text")
-                        or params.get("content") or "")
-                if text and "agent" in method.lower():
-                    yield {"type": "agent.message", "content": text}
-
-        await asyncio.sleep(0.1)
+def _result_to_response(result) -> dict[str, Any]:
+    """Map a CodexTurnResult to an OMA TurnResponse shape."""
+    usage = None
+    if result.usage:
+        u = result.usage
+        usage = {
+            "input_tokens": u.get("inputTokens") or u.get("input_tokens") or 0,
+            "output_tokens": u.get("outputTokens") or u.get("output_tokens") or 0,
+        }
+    files = []
+    for f in result.files:
+        files.append(
+            {
+                "filename": f.filename,
+                "path": f.path,
+                "content_base64": f.content_base64,
+                "media_type": f.media_type,
+                "size_bytes": f.size_bytes,
+            }
+        )
+    return {
+        "events": result.events,
+        "usage": usage,
+        "files": files,
+    }
 
 
 # ---------------------------------------------------------------------------
-# Entrypoint
+# HTTP server
 # ---------------------------------------------------------------------------
+
+
+class _Handler(BaseHTTPRequestHandler):
+    pool: _ConnPool  # set by the factory
+
+    def log_message(self, format: str, *args: Any) -> None:
+        logger.info("codex.bridge %s", format % args)
+
+    def do_GET(self) -> None:
+        if self.path in ("/health", "/codex/health"):
+            self._json_response(200, {"status": "ok"})
+            return
+        self._json_response(404, {"error": "not found"})
+
+    def do_POST(self) -> None:
+        if self.path not in ("/codex/turn", "/turn", "/codex/turn/sse", "/turn/sse"):
+            self._json_response(404, {"error": "not found"})
+            return
+        # SSE streaming endpoint — events emitted as they arrive
+        if self.path in ("/codex/turn/sse", "/turn/sse"):
+            self._do_post_stream()
+            return
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        body = self.rfile.read(length) if length else b""
+        try:
+            req = json.loads(body) if body else {}
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"error": f"invalid json: {e}"})
+            return
+
+        session_id = req.get("session_id", "")
+        prompt = _extract_prompt(req)
+        if not prompt:
+            # Fall back to a continuation marker so codex has something
+            # to respond to (matches Hermes/OpenClaw behavior).
+            prompt = "(continue)"
+
+        instructions = None
+        agent = req.get("agent") or {}
+        if isinstance(agent, dict):
+            instructions = agent.get("system_prompt") or agent.get("system")
+        if not instructions:
+            instructions = None
+
+        # Extract resolved skills (from ResourceResolver). We append each
+        # skill's system_prompt_addition to the instructions, and tell the
+        # client to write skill files into the codex workspace before the
+        # turn starts so the agent can reference them.
+        skills = _extract_skills(req)
+
+        # Extract OMA sub_agents (callable agents). When present, we
+        # describe them to the codex model so it can decide when to spawn
+        # them via codex's native ``spawn_agent`` tool. The spawned
+        # sub-agent threads are mapped to OMA events (session.thread_created,
+        # session.sub_agent_started, etc.) by CodexClient.
+        #
+        # Additionally, when the model doesn't natively support
+        # spawn_agent (e.g. qwen3.7-plus), we explicitly run sub-agent
+        # turns before the parent and emit OMA sub-agent lifecycle events.
+        sub_agents_info = _extract_sub_agents(req)
+        explicit_sub_agent_events: list[dict[str, Any]] = []
+        if sub_agents_info:
+            instructions = _inject_sub_agents_info(instructions, sub_agents_info)
+            # Explicit orchestration: run the first sub-agent as its own
+            # codex thread BEFORE the parent turn, and synthesize OMA
+            # sub-agent lifecycle events (thread_created, agent.message,
+            # thread_idle) scoped to the sub-agent's thread id.
+            try:
+                explicit_sub_agent_events = self.pool.run(
+                    session_id or "default",
+                    _run_explicit_sub_agents(
+                        self.pool, session_id or "default", sub_agents_info, prompt,
+                    ),
+                )
+            except Exception as e:
+                logger.warning("codex explicit sub-agent failed: %s", e)
+                explicit_sub_agent_events = []
+
+        start = time.monotonic()
+        try:
+            client, _ = self.pool.get_or_create(session_id or "default")
+            result = self.pool.run(
+                session_id or "default",
+                client.run_turn(
+                    prompt,
+                    session_id=session_id,
+                    instructions=instructions,
+                    skills=skills,
+                ),
+            )
+        except Exception as e:
+            logger.exception("codex turn failed: %s", e)
+            self._json_response(502, {"error": f"codex turn failed: {e}"})
+            return
+        duration_ms = int((time.monotonic() - start) * 1000)
+        logger.info(
+            "codex turn http done session=%s duration_ms=%d events=%d "
+            "files=%d explicit_sub_events=%d",
+            session_id,
+            duration_ms,
+            len(result.events),
+            len(result.files),
+            len(explicit_sub_agent_events),
+        )
+        response = _result_to_response(result)
+        # Prepend explicit sub-agent events so they appear before the
+        # parent's events in the session timeline (frontend displays
+        # sub-agent thread tab first, then parent messages).
+        if explicit_sub_agent_events:
+            response["events"] = explicit_sub_agent_events + response["events"]
+        self._json_response(200, response)
+
+    def _do_post_stream(self) -> None:
+        """SSE streaming variant of POST /codex/turn.
+
+        Emits each OMA event as an SSE frame the moment the codex client
+        produces it (via the on_event callback), instead of waiting for the
+        entire turn to complete.  The HTTP handler thread reads from a
+        thread-safe queue fed by the asyncio event-loop thread.
+        """
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        body = self.rfile.read(length) if length else b""
+        try:
+            req = json.loads(body) if body else {}
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"error": f"invalid json: {e}"})
+            return
+
+        session_id = req.get("session_id", "")
+        prompt = _extract_prompt(req)
+        if not prompt:
+            prompt = "(continue)"
+
+        instructions = None
+        agent = req.get("agent") or {}
+        if isinstance(agent, dict):
+            instructions = agent.get("system_prompt") or agent.get("system")
+        if not instructions:
+            instructions = None
+
+        skills = _extract_skills(req)
+        sub_agents_info = _extract_sub_agents(req)
+        explicit_sub_agent_events: list[dict[str, Any]] = []
+        if sub_agents_info:
+            instructions = _inject_sub_agents_info(instructions, sub_agents_info)
+            # Explicit orchestration: run sub-agents as separate codex threads
+            # BEFORE the parent turn, and emit OMA sub-agent lifecycle events
+            # through the SSE stream so the frontend sees them immediately.
+            try:
+                explicit_sub_agent_events = self.pool.run(
+                    session_id or "default",
+                    _run_explicit_sub_agents(
+                        self.pool, session_id or "default", sub_agents_info, prompt,
+                    ),
+                )
+            except Exception as e:
+                logger.warning("codex explicit sub-agent (stream) failed: %s", e)
+                explicit_sub_agent_events = []
+
+        # SSE headers
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        # Emit explicit sub-agent events first so they appear before
+        # the parent's events in the frontend session timeline.
+        flusher = self.wfile
+        for ev in explicit_sub_agent_events:
+            payload = json.dumps(ev, ensure_ascii=False).encode("utf-8")
+            ev_type = ev.get("type", "")
+            if ev_type:
+                flusher.write(f"event: {ev_type}\n".encode())
+            flusher.write(b"data: ")
+            flusher.write(payload)
+            flusher.write(b"\n\n")
+            flusher.flush()
+
+        # Cross-thread queue: the asyncio event-loop thread puts events
+        # here; the HTTP handler thread reads and writes SSE frames.
+        event_q: queue.Queue = queue.Queue()
+        done = threading.Event()
+
+        def on_event_sync(event: dict[str, Any]) -> None:
+            event_q.put(event)
+
+        async def _on_event(event: dict[str, Any]) -> None:
+            on_event_sync(event)
+
+        def _stream_runner() -> CodexTurnResult | None:
+            """Run on the event-loop thread; returns the turn result."""
+            try:
+                client, _ = self.pool.get_or_create(session_id or "default")
+
+                async def _turn() -> CodexTurnResult:
+                    return await client.run_turn(
+                        prompt,
+                        session_id=session_id,
+                        instructions=instructions,
+                        skills=skills,
+                        on_event=_on_event,
+                    )
+
+                future = asyncio.run_coroutine_threadsafe(_turn(), self.pool._loop)  # noqa: SLF001
+                return future.result(timeout=self.pool.cfg.get("turn_timeout", 300.0) + 30)
+            except Exception:
+                logger.exception("codex streaming turn failed")
+                return None
+            finally:
+                logger.info("codex: sending poison pill to queue session=%s", session_id)
+                event_q.put(None)  # poison pill
+                done.set()
+
+        # Schedule the turn on the event-loop thread (non-blocking for us).
+        loop = self.pool._ensure_loop()  # noqa: SLF001
+        threading.Thread(target=_stream_runner, daemon=True).start()
+
+        # Stream events to the client as they arrive.
+        try:
+            while not done.is_set():
+                try:
+                    event = event_q.get(timeout=2.0)
+                except queue.Empty:
+                    # No event yet — send SSE comment keepalive so proxies
+                    # don't close the connection.
+                    flusher.write(b": keepalive\n\n")
+                    flusher.flush()
+                    continue
+                if event is None:
+                    logger.info("codex: received poison pill, closing SSE stream session=%s", session_id)
+                    break  # poison pill: turn finished
+                payload = json.dumps(event, ensure_ascii=False).encode("utf-8")
+                ev_type = event.get("type", "")
+                if ev_type:
+                    flusher.write(f"event: {ev_type}\n".encode())
+                flusher.write(b"data: ")
+                flusher.write(payload)
+                flusher.write(b"\n\n")
+                flusher.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            logger.info("codex SSE client disconnected session=%s", session_id)
+            return
+        finally:
+            done.set()
+
+    def _json_response(self, status: int, body: dict[str, Any]) -> None:
+        payload = json.dumps(body).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def make_server(cfg: Optional[dict[str, Any]] = None) -> tuple[ThreadingHTTPServer, _ConnPool]:
+    cfg = cfg or _config_from_env()
+    pool = _ConnPool(cfg)
+    handler_cls = type("_BoundHandler", (_Handler,), {"pool": pool})
+    host, _, port = cfg["listen"].rpartition(":")
+    host = host or "127.0.0.1"
+    port = int(port or "8092")
+    server = ThreadingHTTPServer((host, port), handler_cls)
+    return server, pool
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    cfg = _config_from_env()
+    logger.info("codex bridge starting on %s", cfg["listen"])
+    logger.info(
+        "codex ws_url=%s ssh_host=%s remote_port=%d",
+        cfg["ws_url"],
+        cfg.get("ssh_host") or "(direct)",
+        cfg["remote_port"],
+    )
+    server, pool = make_server(cfg)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        logger.info("codex bridge interrupted, shutting down")
+    finally:
+        pool.shutdown()
+        server.server_close()
+    return 0
+
 
 if __name__ == "__main__":
-    import uvicorn
-    logging.basicConfig(level=logging.INFO)
-    uvicorn.run(app, host="0.0.0.0", port=BRIDGE_PORT)
+    sys.exit(main())
