@@ -48,11 +48,13 @@ type CodexClient struct {
 // are the resolved callable agent snapshots; the bridge describes them
 // to the codex model so it can decide when to spawn them.
 type codexBridgeTurnRequest struct {
-	SessionID string          `json:"session_id"`
-	Agent     json.RawMessage `json:"agent,omitempty"`
-	Events    json.RawMessage `json:"events,omitempty"`
-	Skills    json.RawMessage `json:"skills,omitempty"`
-	SubAgents json.RawMessage `json:"sub_agents,omitempty"`
+	SessionID      string          `json:"session_id"`
+	Agent          json.RawMessage `json:"agent,omitempty"`
+	Events         json.RawMessage `json:"events,omitempty"`
+	Skills         json.RawMessage `json:"skills,omitempty"`
+	SubAgents      json.RawMessage `json:"sub_agents,omitempty"`
+	McpProxyBase   string          `json:"mcp_proxy_base,omitempty"`
+	McpProxyAPIKey string          `json:"mcp_proxy_api_key,omitempty"`
 }
 
 // codexBridgeTurnResponse is the JSON body returned by the bridge.
@@ -116,11 +118,13 @@ func (c *CodexClient) RunTurn(
 		}
 	}
 	body, err := json.Marshal(codexBridgeTurnRequest{
-		SessionID: req.SessionID,
-		Agent:     agentRaw,
-		Events:    eventsRaw,
-		Skills:    skillsRaw,
-		SubAgents: subAgentsRaw,
+		SessionID:      req.SessionID,
+		Agent:          agentRaw,
+		Events:         eventsRaw,
+		Skills:         skillsRaw,
+		SubAgents:      subAgentsRaw,
+		McpProxyBase:   req.McpProxyBase,
+		McpProxyAPIKey: req.McpProxyAPIKey,
 	})
 	if err != nil {
 		return TurnResponse{}, fmt.Errorf("codex marshal body: %w", err)
@@ -386,11 +390,13 @@ func (c *CodexClient) buildBridgeRequest(req TurnRequest) codexBridgeTurnRequest
 		subAgentsRaw, _ = json.Marshal(req.SubAgents)
 	}
 	return codexBridgeTurnRequest{
-		SessionID: req.SessionID,
-		Agent:     agentRaw,
-		Events:    eventsRaw,
-		Skills:    skillsRaw,
-		SubAgents: subAgentsRaw,
+		SessionID:      req.SessionID,
+		Agent:          agentRaw,
+		Events:         eventsRaw,
+		Skills:         skillsRaw,
+		SubAgents:      subAgentsRaw,
+		McpProxyBase:   req.McpProxyBase,
+		McpProxyAPIKey: req.McpProxyAPIKey,
 	}
 }
 
