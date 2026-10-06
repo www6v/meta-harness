@@ -710,13 +710,22 @@ class _Handler(BaseHTTPRequestHandler):
                     logger.warning("codex: fs/writeFile MCP config also failed: %s", e2)
                     return
         else:
-            # Local Codex — write directly
+            # No SSH configured — use fs/writeFile to write to Codex container
             try:
-                with open(config_path, "w") as f:
-                    f.write(config_content)
-                logger.info("codex: wrote MCP config locally to %s", config_path)
+                client, _ = self.pool.get_or_create(session_id)
+                if client._ws is None:
+                    self.pool.run(session_id, client.connect())
+                import base64
+                content_b64 = base64.b64encode(config_content.encode()).decode()
+                timeout = float(self.pool.cfg.get("turn_timeout", 300))
+                self.pool.run(session_id, client._call("fs/writeFile", {
+                    "path": config_path,
+                    "content": content_b64,
+                    "encoding": "base64",
+                }, timeout=timeout))
+                logger.info("codex: wrote MCP config via fs/writeFile to %s", config_path)
             except Exception as e:
-                logger.warning("codex: local MCP config write failed: %s", e)
+                logger.warning("codex: fs/writeFile MCP config failed: %s", e)
                 return
 
         # Trigger reload via RPC so Codex picks up new MCP servers
