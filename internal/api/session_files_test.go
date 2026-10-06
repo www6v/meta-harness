@@ -59,6 +59,7 @@ func TestPromoteSandboxFile(t *testing.T) {
 			store.NewTeamRepo(db),
 			nil,
 			"", "", "", "", "", "", "",
+			nil,
 		),
 	})
 
@@ -169,6 +170,7 @@ func TestSessionDeleteRemovesWorkdir(t *testing.T) {
 			store.NewTeamRepo(db),
 			nil,
 			"", "", "", "", "", "", "",
+			nil,
 		),
 	})
 

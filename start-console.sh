@@ -81,7 +81,7 @@ export OMA_DATABASE_PATH="${OMA_DATABASE_PATH:-${DATABASE_PATH}}"
 export OMA_INTERNAL_SECRET="${OMA_INTERNAL_SECRET:-}"
 # export OMA_DEEPSEEK_GATEWAY_URL="${OMA_DEEPSEEK_GATEWAY_URL:-http://127.0.0.1:3080}"
 
-# Codex harness: the Python bridge (meta-harness-ext/ssh/codex_bridge.py)
+# Codex harness: the Python bridge (harness/codex_bridge/codex_bridge.py)
 # speaks JSON-RPC over WebSocket (optionally SSH-tunneled) to the remote
 # codex app-server. The Go server talks to the bridge over HTTP.
 export OMA_CODEX_BRIDGE_URL="${OMA_CODEX_BRIDGE_URL:-http://127.0.0.1:8092}"
@@ -106,7 +106,7 @@ mkdir -p "${SANDBOX_WORKDIR}"
 # python venv (has websockets + paramiko installed), falls back to system
 # python. Runs the bridge module as a package so relative imports resolve.
 _start_codex_bridge() {
-  local bridge_dir="${ROOT_DIR}/../meta-harness-ext/ssh"
+  local bridge_dir="${ROOT_DIR}/harness/codex_bridge"
   local py=""
   if [[ -x "${ROOT_DIR}/harness/.venv/bin/python" ]]; then
     py="${ROOT_DIR}/harness/.venv/bin/python"

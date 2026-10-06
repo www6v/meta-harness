@@ -57,6 +57,7 @@ func TestSessionExecLocal(t *testing.T) {
 			store.NewTeamRepo(db),
 			nil,
 			"", "", "", "", "", "", "",
+			nil,
 		),
 	})
 

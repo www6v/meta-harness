@@ -67,6 +67,7 @@ func testTeamRouterWithAPIKeys(
 			teams,
 			tasks,
 			"", "", "", "", "", "", "",
+			nil,
 		),
 	})
 	return handler, apiKeys, agents, sessions, teams, tasks

@@ -62,6 +62,7 @@ func TestSessionDeleteSnapshotsWorkspace(t *testing.T) {
 			store.NewTeamRepo(db),
 			nil,
 			"", "", "", "", "", "", "",
+			nil,
 		),
 	})
 

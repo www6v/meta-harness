@@ -222,6 +222,7 @@ func testRouterWithApiKeys(t *testing.T) http.Handler {
 			store.NewTeamRepo(db),
 			nil,
 			"", "", "", "", "", "", "",
+			nil,
 		),
 	})
 }

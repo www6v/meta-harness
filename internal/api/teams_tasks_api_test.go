@@ -62,6 +62,7 @@ func testTaskRouter(t *testing.T, db *sql.DB) (
 			teams,
 			tasks,
 			"", "", "", "", "", "", "",
+			nil,
 		),
 	})
 	return handler, teams, tasks, sessions

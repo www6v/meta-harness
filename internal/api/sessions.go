@@ -180,7 +180,14 @@ func mountSessionRoutes(
 		}
 
 		// Create corresponding deepseek-harness session for file isolation
-		if h.deepSeekClient != nil {
+		// Skip DSH session creation for Codex harness agents (they use a different backend)
+		agentCfg, agentErr := h.agents.Get(req.Context(), tenantID(req), agentID)
+		shouldCreateDSH := h.deepSeekClient != nil
+		if agentErr == nil && agentCfg.Harness == string(harness.KindCodex) {
+			shouldCreateDSH = false
+			log.Printf("[SESSION CREATE] skipping DSH session for codex harness agent %s", agentID)
+		}
+		if shouldCreateDSH {
 			log.Printf("[SESSION CREATE] Creating DSH session for oma-session %s", sess.ID)
 			dshSessionID, err := h.deepSeekClient.CreateSession(req.Context(), sess.ID)
 			if err != nil {
@@ -197,7 +204,7 @@ func mountSessionRoutes(
 					sess.DshSessionID = &dshSessionID
 				}
 			}
-		} else {
+		} else if h.deepSeekClient == nil {
 			log.Printf("[SESSION CREATE] deepSeekClient is nil - skipping DSH session creation")
 		}
 

@@ -76,6 +76,7 @@ func testRouterDeps(
 		store.NewTeamRepo(db),
 		nil,
 		mcpProxyBase, "", gatewayOrigin, testInternalSecret, "", "", "",
+		nil,
 	)
 	memoryStores := store.NewMemoryStoreRepo(db, nil)
 	dreams := store.NewDreamRepo(db)
@@ -236,6 +237,7 @@ func testRouterSharedDB(
 			store.NewTeamRepo(db),
 			nil,
 			"", "", "", "", "", "", "",
+			nil,
 		),
 	})
 	return handler, reg, sessions

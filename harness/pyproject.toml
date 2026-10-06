@@ -7,6 +7,8 @@ dependencies = [
   "fastapi>=0.115.0",
   "uvicorn[standard]>=0.32.0",
   "httpx>=0.28.0",
+  "websockets>=12.0",
+  "paramiko>=3.0.0",
   "markdownify>=0.14.0",
   "pi-coding-agent",
   "pi-ai",
@@ -47,4 +49,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["oma_adapter"]
+packages = ["oma_adapter", "codex_bridge"]

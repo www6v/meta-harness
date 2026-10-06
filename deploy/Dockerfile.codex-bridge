@@ -20,8 +20,8 @@ WORKDIR /app/bridge
 # Install websockets (for codex WS client) and paramiko (for optional SSH tunnel)
 RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" websockets paramiko
 
-# Copy the bridge code from meta-harness-ext/ssh
-COPY meta-harness-ext/ssh/ ./
+# Copy the bridge code from harness/codex_bridge
+COPY harness/codex_bridge/ ./
 
 # Listen on all interfaces so the Go container can reach us
 ENV CODEX_LISTEN=0.0.0.0:8092
